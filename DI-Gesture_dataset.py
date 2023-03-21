@@ -1,8 +1,10 @@
+import itertools
 import math
+import random
 
 import torch
 from torch.utils.data import Dataset
-from functools import lru_cache
+from itertools import chain
 import os
 import h5py
 import numpy as np
@@ -21,6 +23,8 @@ participant_domain = [['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7'],
 
 root = 'D:\\dataset\\mmWave_cross_domain_gesture_dataset'
 
+st = {'e1': 0, 'e2': 0, 'e3': 0, 'e4': 0, 'e5': 0, 'e6': 0}
+
 
 # file_example n_liftleft_e1_u1_p1_s1.npy
 def get_samples(prefix):
@@ -35,33 +39,64 @@ def get_samples(prefix):
     return samples
 
 
+train_data = []
+train_label = []
+test_data = []
+
+
+def assign_samples_k_fold(act, samples):
+    if len(samples) <= 0:
+        return
+    random.shuffle(samples)
+    size = len(samples) // 5
+    chunks = [samples[i:i + size] for i in range(0, len(samples), size)]
+    for i, value in enumerate(chunks):
+        train_data[i].extend(value)
+
+
+
 def split_data(domain):
-    train_data = []
-    test_data = []
-    file_list = os.listdir(root)
-    num_walking = 50
-    file_format = 'n_{act}_{env}_{user}'
-    if domain == 'cross_domain':
-        train_data.extend([[], [], [], []])
-        for act in gestures, negative_samples:
+    file_format = '{type}_{act}_{env}_{user}'
+    if domain == 'in_domain':
+        train_data.extend([[], [], [], [], []])
+        train_label.extend([[], [], [], [], []])
+        for act in itertools.chain(gestures, negative_samples):
+            if act in gestures:
+                is_gesture = 'y'
+            else:
+                is_gesture = 'n'
             for e in envs:
                 for u in participants:
-                    prefix = file_format.format(act=act, env=e, user=u)
+                    prefix = file_format.format(type=is_gesture, act=act, env=e, user=u)
                     if act == 'walking':
                         samples = get_samples(prefix)
+                        assign_samples_k_fold(act, samples)
                     else:
                         for p in locations:
-
-
-    pass
+                            samples = get_samples(prefix + '_' + p)
+                            assign_samples_k_fold(act, samples)
+    elif domain == 'person':
+        pass
 
 
 class di_gesture_dataset(Dataset):
-    def __init__(self, domain):
-        pass
+    def __init__(self, file_names):
+        self.len = len(file_names)
+        self.cache_size = 50
+        self.data = np.empty(self.cache_size)
+        self.cache_index = (0, self.cache_size)
+        for i in range(self.cache_size):
+            item = np.load(os.path.join(root, file_names[i]))
+            self.data[i] = item
 
     def __getitem__(self, index):
-        pass
+        if index <= self.cache_index[0] < self.cache_index[1]:
+            return
 
     def __len__(self):
         pass
+
+
+split_data('in_domain')
+
+print(st)
