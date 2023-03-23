@@ -137,11 +137,12 @@ class AOA_Fourier_Net(nn.Module):
 class STN3d(nn.Module):
     def __init__(self):
         super(STN3d, self).__init__()
-        self.conv1 = torch.nn.Conv3d(1, 8, kernel_size=3)
-        self.conv2 = torch.nn.Conv3d(8, 16, kernel_size=3)
-        self.conv3 = torch.nn.Conv3d(16, 32, kernel_size=3)
-        self.conv4 = torch.nn.Conv3d(32, 64, kernel_size=3)
-        self.fc1 = nn.Linear(65003520, 512)
+        self.conv1 = torch.nn.Conv3d(1, 4, kernel_size=3)
+        self.conv2 = torch.nn.Conv3d(4, 8, kernel_size=3)
+        self.conv3 = torch.nn.Conv3d(8, 16, kernel_size=3)
+        self.conv4 = torch.nn.Conv3d(16, 32, kernel_size=3)
+        self.maxpool = nn.MaxPool3d(2, ceil_mode=True)
+        self.fc1 = nn.Linear(23200, 512)
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, 3 * 4)
 
@@ -149,8 +150,10 @@ class STN3d(nn.Module):
         batchsize = x.size()[0]
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
+        x = self.maxpool(x)
         x = F.relu(self.conv3(x))
         x = F.relu(self.conv4(x))
+        x = self.maxpool(x)
         x = x.view(batchsize, -1)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
@@ -162,6 +165,55 @@ class STN3d(nn.Module):
             iden = iden.cuda()
         x = x.view(-1, 3, 4)
         x = torch.cat((x, iden), dim=1)
+        return x
+
+
+class DRAI_2DCNNLSTM_DI_GESTURE_DENOISE(nn.Module):
+    def __init__(self):
+        super(DRAI_2DCNNLSTM_DI_GESTURE_DENOISE, self).__init__()
+        self.stn = STN3d()
+        self.conv1 = nn.Conv2d(1, 8, 3)
+        self.bn1 = nn.BatchNorm2d(8)
+        self.conv2 = nn.Conv2d(8, 16, 3)
+        self.bn2 = nn.BatchNorm2d(16)
+        self.conv3 = nn.Conv2d(16, 32, 3)
+        self.bn3 = nn.BatchNorm2d(32)
+        self.maxpool = nn.MaxPool2d(2, ceil_mode=True)
+        self.lstm = nn.LSTM(input_size=21632, hidden_size=128, num_layers=1, batch_first=True)
+
+        # self.fc_2 = nn.Linear(128, 64)
+        self.dropout = nn.Dropout(p=0.5)
+        self.fc_3 = nn.Linear(128, 13)
+        # self.flatten = nn.Flatten
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x, data_length):
+        x = x.view(-1, 1, 128, 32, 32)
+        x = self.stn(x)
+        x = x.view(-1, 1, 32, 32)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        # x = self.maxpool(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        # x = self.maxpool(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+        # x = self.maxpool(x)
+        x = x.view(len(data_length), -1, 21632)
+        x = pack_padded_sequence(x, data_length, batch_first=True)
+        output, (h_n, c_n) = self.lstm(x)
+        # output, out_len = pad_packed_sequence(output, batch_first=True)
+        x = h_n[-1]
+
+        # x = self.fc_2(x)
+        x = self.dropout(x)
+        x = self.fc_3(x)
+        x = self.softmax(x)
+
         return x
 
 
@@ -794,3 +846,9 @@ class RDAT_3DCNNLSTM(nn.Module):
         x = F.relu(x)
         x = self.fc_3(x)
         return x
+
+
+if __name__ == '__main__':
+    net = DRAI_2DCNNLSTM_DI_GESTURE_DENOISE()
+    inputs = torch.zeros((128, 128, 32, 32))
+    net.forward(inputs, np.random.random(size=(1, 127, 128)))

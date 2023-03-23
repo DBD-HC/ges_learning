@@ -137,12 +137,57 @@ def five_fold_validation(device):
         criterion = nn.CrossEntropyLoss()
 
         batch_size = 128
-        train_set, test_set = split_data('in_domain', fold + 1)
+        train_set, test_set = split_data('in_domain', fold)
         acc = train(net, optimizer, criterion, train_set, test_set, batch_size)
         acc_history.append(acc)
         plot_result(fold)
         print('=====================fold{} for test acc_history:{}================='.format(fold + 1, acc_history))
 
+
+def cross_person(device):
+    net = DRAI_2DCNNLSTM_DI_GESTURE()
+    net = net.to(device)
+
+    optimizer = optim.Adam(net.parameters(), lr=learning_rate)
+    criterion = nn.CrossEntropyLoss()
+    batch_size = 128
+    train_set, test_set = split_data('cross_person')
+    acc = train(net, optimizer, criterion, train_set, test_set, batch_size)
+    plot_result('cross_person')
+    print('cross person accuracy {}'.format(acc))
+
+
+def cross_environment(device):
+    acc_history = []
+    for e in range(len(envs)):
+        net = DRAI_2DCNNLSTM_DI_GESTURE()
+        net = net.to(device)
+        optimizer = optim.Adam(net.parameters(), lr=learning_rate)
+
+        criterion = nn.CrossEntropyLoss()
+
+        batch_size = 128
+        train_set, test_set = split_data('cross_environment', env_index=e)
+        acc = train(net, optimizer, criterion, train_set, test_set, batch_size)
+        acc_history.append(acc)
+        plot_result('env_{}'.format(e))
+        print('=====================env{} for test acc_history:{}================='.format(e + 1, acc_history))
+
+def cross_position(device):
+    acc_history = []
+    for p in range(len(locations)):
+        net = DRAI_2DCNNLSTM_DI_GESTURE()
+        net = net.to(device)
+        optimizer = optim.Adam(net.parameters(), lr=learning_rate)
+
+        criterion = nn.CrossEntropyLoss()
+
+        batch_size = 128
+        train_set, test_set = split_data('cross_position', env_index=p)
+        acc = train(net, optimizer, criterion, train_set, test_set, batch_size)
+        acc_history.append(acc)
+        plot_result('position_{}'.format(p))
+        print('=====================position{} for test acc_history:{}================='.format(p + 1, acc_history))
 
 if __name__ == '__main__':
     learning_rate = 0.0001
