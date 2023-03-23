@@ -4,6 +4,7 @@ from cplxmodule.nn import CplxConv1d, CplxLinear, CplxDropout
 from cplxmodule.nn import CplxModReLU, CplxParameter, CplxModulus, CplxToCplx
 from cplxmodule.nn.modules.casting import TensorToCplx
 from cplxmodule.nn import RealToCplx, CplxToReal
+from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
@@ -61,12 +62,13 @@ class Doppler_Fourier_Net(nn.Module):
         x = self.doppler_nn(x)
         return x
 
+
 class DenoisingCNN(nn.Module):
     def __init__(self):
         super(DenoisingCNN, self).__init__()
-        self.conv1 = nn.Conv3d(1, 32, 3, padding= 1)
-        self.conv2 = nn.Conv3d(32, 32, 3, padding= 1)
-        self.conv3 = nn.Conv3d(32, 1, 3, padding= 1)
+        self.conv1 = nn.Conv3d(1, 32, 3, padding=1)
+        self.conv2 = nn.Conv3d(32, 32, 3, padding=1)
+        self.conv3 = nn.Conv3d(32, 1, 3, padding=1)
         self.relu = nn.ReLU()
 
     def forward(self, x):
@@ -153,11 +155,59 @@ class STN3d(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
-        iden = Variable(torch.from_numpy(np.array([1, 0, 0, 0, 1, 0, 0, 0, 1]).astype(np.float32))).view(1, 3, 3).repeat(batchsize, 1, 1)
+        iden = Variable(torch.from_numpy(np.array([1, 0, 0, 0, 1, 0, 0, 0, 1]).astype(np.float32))).view(1, 3,
+                                                                                                         3).repeat(
+            batchsize, 1, 1)
         if x.is_cuda:
             iden = iden.cuda()
         x = x.view(-1, 3, 4)
         x = torch.cat((x, iden), dim=1)
+        return x
+
+
+class DRAI_2DCNNLSTM_DI_GESTURE(nn.Module):
+    def __init__(self):
+        super(DRAI_2DCNNLSTM_DI_GESTURE, self).__init__()
+        self.conv1 = nn.Conv2d(1, 8, 3)
+        self.bn1 = nn.BatchNorm2d(8)
+        self.conv2 = nn.Conv2d(8, 16, 3)
+        self.bn2 = nn.BatchNorm2d(16)
+        self.conv3 = nn.Conv2d(16, 32, 3)
+        self.bn3 = nn.BatchNorm2d(32)
+        self.maxpool = nn.MaxPool2d(2, ceil_mode=True)
+        self.lstm = nn.LSTM(input_size=21632, hidden_size=128, num_layers=1, batch_first=True)
+
+        # self.fc_2 = nn.Linear(128, 64)
+        self.dropout = nn.Dropout(p=0.5)
+        self.fc_3 = nn.Linear(128, 13)
+        # self.flatten = nn.Flatten
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x, data_length):
+        x = x.view(-1, 1, 32, 32)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        # x = self.maxpool(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        # x = self.maxpool(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+        # x = self.maxpool(x)
+        x = x.view(len(data_length), -1, 21632)
+        x = pack_padded_sequence(x, data_length, batch_first=True)
+        output, (h_n, c_n) = self.lstm(x)
+        # output, out_len = pad_packed_sequence(output, batch_first=True)
+        x = h_n[-1]
+
+        # x = self.fc_2(x)
+        x = self.dropout(x)
+        x = self.fc_3(x)
+        x = self.softmax(x)
+
         return x
 
 
@@ -352,6 +402,8 @@ class RDT_2DCNNLSTM_Air_Writing(nn.Module):
         x = F.relu(x)
         x = self.fc_3(x)
         return x
+
+
 class RDT_2DCNNLSTM(nn.Module):
     def __init__(self):
         super(RDT_2DCNNLSTM, self).__init__()
@@ -400,8 +452,6 @@ class RDT_2DCNNLSTM(nn.Module):
         return x
 
 
-
-
 class RDT_3DCNN_air_writing(nn.Module):
     def __init__(self):
         super(RDT_3DCNN_air_writing, self).__init__()
@@ -409,7 +459,7 @@ class RDT_3DCNN_air_writing(nn.Module):
         self.doppler_net = Doppler_Fourier_Net()
         self.cplx_transpose = CplxToCplx[torch.transpose]
         self.denoise = DenoisingCNN()
-        #self.stn = STN3d()
+        # self.stn = STN3d()
         self.conv1 = nn.Conv3d(1, 4, 3)
         self.bn1 = nn.BatchNorm3d(4)
         self.conv2 = nn.Conv3d(4, 8, 3)
@@ -431,7 +481,7 @@ class RDT_3DCNN_air_writing(nn.Module):
         x = CplxModulus()(x)
         x = x.view(-1, 1, 10, 100, 128)
         # x = self.denoise(x)
-        #x = self.stn(x)
+        # x = self.stn(x)
         x = self.conv1(x)
         x = self.bn1(x)
         x = F.relu(x)
