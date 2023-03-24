@@ -21,6 +21,7 @@ locations = ['p1', 'p2', 'p3', 'p4', 'p5']
 root = '/root/autodl-nas/mmWave_cross_domain_gesture_dataset'
 
 st = {'e1': 0, 'e2': 0, 'e3': 0, 'e4': 0, 'e5': 0, 'e6': 0}
+st_act = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0}
 
 
 # file_example n_liftleft_e1_u1_p1_s1.npy
@@ -49,6 +50,7 @@ def assign_samples_k_fold(ges_type, samples):
     size = len(samples) // 5
     chunks = [samples[i:i + size] for i in range(0, len(samples), size)]
     for i, value in enumerate(chunks):
+        st_act[ges_type] += len(value)
         train_data_filenames[i].extend(value)
         train_label_list[i].extend([ges_type] * size)
 
@@ -57,7 +59,7 @@ def get_samples(file_format, act_type, act, env, participant):
     prefix = file_format.format(act=act, env=env, user=participant)
     samples = []
     sample_labels = []
-    if act == 'walking':
+    if act == 'n_walking':
         sub_samples = check_and_get(prefix)
         samples.extend(sub_samples)
         sample_labels.extend([act_type] * len(sub_samples))
@@ -88,7 +90,7 @@ def split_data(domain, fold=0, env_index=0, position_index=0):
                 for e in envs:
                     for u in participants:
                         prefix = file_format.format(act=act, env=e, user=u)
-                        if act == 'walking':
+                        if act == 'n_walking':
                             samples = check_and_get(prefix)
                             assign_samples_k_fold(i, samples)
                         else:
@@ -97,8 +99,9 @@ def split_data(domain, fold=0, env_index=0, position_index=0):
                                 assign_samples_k_fold(i, samples)
             # np.save('train_data_filenames.npy', np.array(train_data_filenames))
             # np.save('train_label_list.npy', np.array(train_label_list))
-        tr, te =  combine(fold)
-        return  tr,te
+        tr, te = combine(fold)
+        print('ges and num {}'.format(st_act))
+        return tr, te
     elif domain == 'cross_person':
         if len(train_data_filenames) == 0:
             for i, act in enumerate(itertools.chain(gestures, negative_samples)):
@@ -130,7 +133,7 @@ def split_data(domain, fold=0, env_index=0, position_index=0):
             train_label_list.extend([[], [], [], [], []])
             file_format = file_format + '_{position}'
             for i, act in enumerate(itertools.chain(gestures, negative_samples)):
-                if act == 'walking':
+                if act == 'n_walking':
                     continue
                 for index, e in enumerate(envs):
                     for u in participants:
@@ -147,7 +150,6 @@ class di_gesture_dataset(Dataset):
         self.len = len(file_names)
         self.max_frame = max_frames
         self.file_names = np.array(file_names)
-        self.datas = np.zeros((self.len, self.max_frame, 32, 32))
         permutation = np.random.permutation(self.len)
         self.file_names = self.file_names[permutation]
         self.labels = np.array(labels)
@@ -158,9 +160,9 @@ class di_gesture_dataset(Dataset):
         #    self.datas[i, :len(d)] = d
 
     def __getitem__(self, index):
-        # DRAI = np.zeros((self.max_frame, 32, 32))
+        DRAI = np.zeros((self.max_frame, 32, 32))
         d = np.load(os.path.join(root, self.file_names[index]))
-        # DRAI[:len(d)] = d
+        DRAI[:len(d)] = d
         return torch.from_numpy(d), torch.tensor(self.labels[index])
 
     def __len__(self):

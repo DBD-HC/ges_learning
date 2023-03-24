@@ -137,49 +137,105 @@ class AOA_Fourier_Net(nn.Module):
 class STN3d(nn.Module):
     def __init__(self):
         super(STN3d, self).__init__()
-        self.conv1 = torch.nn.Conv3d(1, 4, kernel_size=3)
-        self.conv2 = torch.nn.Conv3d(4, 8, kernel_size=3)
-        self.conv3 = torch.nn.Conv3d(8, 16, kernel_size=3)
-        self.conv4 = torch.nn.Conv3d(16, 32, kernel_size=3)
-        self.maxpool = nn.MaxPool3d(2, ceil_mode=True)
-        self.fc1 = nn.Linear(23200, 512)
-        self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, 3 * 4)
+
+        # 定义局部化网络
+        self.localization = nn.Sequential(
+            nn.Conv3d(1, 8, kernel_size=7),
+            nn.MaxPool3d(2, stride=2),
+            nn.ReLU(True),
+            nn.Conv3d(8, 10, kernel_size=5),
+            nn.MaxPool3d(2, stride=2),
+            nn.ReLU(True)
+        )
+
+        # 定义网格生成器
+        self.fc = nn.Sequential(
+            nn.Linear(10 * 3 * 3 * 3, 32),
+            nn.ReLU(True),
+            nn.Linear(32, 3 * 3 * 3)
+        )
+
+        # 初始化网格生成器的权重和偏置
+        self.fc[2].weight.data.zero_()
+        self.fc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 1, 0, 0, 0, 1], dtype=torch.float))
 
     def forward(self, x):
-        batchsize = x.size()[0]
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = self.maxpool(x)
-        x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
-        x = self.maxpool(x)
-        x = x.view(batchsize, -1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        iden = Variable(torch.from_numpy(np.array([1, 0, 0, 0, 1, 0, 0, 0, 1]).astype(np.float32))).view(1, 3,
-                                                                                                         3).repeat(
-            batchsize, 1, 1)
-        if x.is_cuda:
-            iden = iden.cuda()
-        x = x.view(-1, 3, 4)
-        x = torch.cat((x, iden), dim=1)
+        # 提取特征并计算变换矩阵
+        x = self.localization(x)
+        x = x.view(-1, 10 * 3 * 3 * 3)
+        theta = self.fc(x)
+        theta = theta.view(-1, 3, 3, 3)
+
+        # 对输入数据进行仿射变换
+        grid = F.affine_grid(theta, x.size())
+        x = F.grid_sample(x, grid)
+
         return x
 
 
-class DRAI_2DCNNLSTM_DI_GESTURE_DENOISE(nn.Module):
+class SIGNAL_NET(nn.Module):
     def __init__(self):
-        super(DRAI_2DCNNLSTM_DI_GESTURE_DENOISE, self).__init__()
-        self.stn = STN3d()
-        self.conv1 = nn.Conv2d(1, 8, 3)
-        self.bn1 = nn.BatchNorm2d(8)
-        self.conv2 = nn.Conv2d(8, 16, 3)
-        self.bn2 = nn.BatchNorm2d(16)
-        self.conv3 = nn.Conv2d(16, 32, 3)
-        self.bn3 = nn.BatchNorm2d(32)
+        super(SIGNAL_NET, self).__init__()
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=(16, 1))
+        self.bn1 = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=(8, 1))
+        self.bn2 = nn.BatchNorm2d(32)
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=(4, 1))
+        self.bn3 = nn.BatchNorm2d(64)
         self.maxpool = nn.MaxPool2d(2, ceil_mode=True)
-        self.lstm = nn.LSTM(input_size=21632, hidden_size=128, num_layers=1, batch_first=True)
+
+    def forward(self, x):
+        x = x.view(-1, 1, 32, 32)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        # x = self.maxpool(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        # x = self.maxpool(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = self.maxpool(x)
+        return x
+
+
+class SIGNAL_NET_BETA(nn.Module):
+    def __init__(self):
+        super(SIGNAL_NET_BETA, self).__init__()
+        self.fc_1 = nn.Linear(128, 256)
+        self.fc_2 = nn.Linear(256, 128)
+        self.fc_3 = nn.Linear(128, 64)
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=(16, 1))
+        self.bn1 = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=(8, 1))
+        self.bn2 = nn.BatchNorm2d(32)
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=(4, 1))
+        self.bn3 = nn.BatchNorm2d(64)
+        self.maxpool = nn.MaxPool2d(2, ceil_mode=True)
+
+    def forward(self, x):
+        x = x.view(-1, 128, 32*32)
+        x = torch.transpose(x, 1, 2)
+        x = self.fc_1(x)
+        x = self.fc_2(x)
+        x = self.fc_3(x)
+        x = torch.transpose(x, 1, 2)
+        x = x.view(-1, 1, 32, 32)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        # x = self.maxpool(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        # x = self.maxpool(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = self.maxpool(x)
+        return x
+
+class DRAI_2DCNNLSTM_DI_GESTURE_BETA(nn.Module):
+    def __init__(self):
+        super(DRAI_2DCNNLSTM_DI_GESTURE_BETA, self).__init__()
+        self.sn = SIGNAL_NET_BETA()
+        self.lstm = nn.LSTM(input_size=4096, hidden_size=128, num_layers=1, batch_first=True)
 
         # self.fc_2 = nn.Linear(128, 64)
         self.dropout = nn.Dropout(p=0.5)
@@ -188,22 +244,8 @@ class DRAI_2DCNNLSTM_DI_GESTURE_DENOISE(nn.Module):
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x, data_length):
-        x = x.view(-1, 1, 128, 32, 32)
-        x = self.stn(x)
-        x = x.view(-1, 1, 32, 32)
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
-        # x = self.maxpool(x)
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = F.relu(x)
-        # x = self.maxpool(x)
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = F.relu(x)
-        # x = self.maxpool(x)
-        x = x.view(len(data_length), -1, 21632)
+        x = self.sn(x)
+        x = x.view(len(data_length), -1, 4096)
         x = pack_padded_sequence(x, data_length, batch_first=True)
         output, (h_n, c_n) = self.lstm(x)
         # output, out_len = pad_packed_sequence(output, batch_first=True)

@@ -8,9 +8,12 @@ import matplotlib.pyplot as plt
 import torchvision
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 import os
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
 
 history = {"acc_train": [], "acc_validation": [], "loss_train": [], "loss_validation": []}
-
+best_ture_label = []
+best_predict_label = []
 
 def plot_result(file_name):
     # 绘制准确率变化图
@@ -35,10 +38,21 @@ def plot_result(file_name):
     plt.savefig('loss_{}.png'.format(file_name))
     plt.show()
 
-    history['acc_train'] = []
-    history['acc_validation'] = []
-    history['loss_train'] = []
-    history['loss_validation'] = []
+    cm = confusion_matrix(best_ture_label, best_predict_label)
+    col_sum = np.sum(cm, axis=0)
+    cm = np.round(100 * cm / col_sum[np.newaxis, :], 1)
+
+    # 绘制热图
+    sns.heatmap(cm, annot=True, cmap='Blues', fmt='g')
+    plt.xlabel('Predicted labels')
+    plt.ylabel('True labels')
+    plt.savefig('confusion_matrix_{}.png'.format(file_name))
+    plt.show()
+
+    history['acc_train'].clear()
+    history['acc_validation'].clear()
+    history['loss_train'].clear()
+    history['loss_validation'].clear()
 
 
 def collate_fn(datas_and_labels):
@@ -52,17 +66,17 @@ def collate_fn(datas_and_labels):
 
 def train(net, optimizer, criterion, train_set, test_set, batch_size):
     trainloader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=8,
-                                              pin_memory=True,
-                                              collate_fn=collate_fn)
+                                              pin_memory=True)
     testloader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False,
                                              num_workers=8,
-                                             pin_memory=True,
-                                             collate_fn=collate_fn)
-    total_epoch = 50
+                                             pin_memory=True)
+    total_epoch = 70
     model_name = 'test.pth'
     acc_best = 0
     previous_acc = 0
     previous_loss = 1000000
+    ture_label = []
+    predict_label = []
     for epoch in range(total_epoch):
         # train
         net.train()
@@ -98,6 +112,7 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
         val_correct_sample = 0.0
         with torch.no_grad():
             for i, (datas, labels, data_lengths) in enumerate(testloader):
+                ture_label.extend([x.item() for x in labels])
                 datas = datas.to(device)
                 labels = labels.to(device)
                 output = net(datas.float(), data_lengths)
@@ -105,11 +120,16 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
                 validation_loss += loss.item() * len(labels)
                 val_all_sample = val_all_sample + len(labels)
                 prediction = torch.argmax(output, 1)
+                predict_label.extend([x.item() for x in prediction])
                 val_correct_sample += (prediction == labels).sum().float().item()
         val_acc = val_correct_sample / val_all_sample
         val_loss = validation_loss / val_all_sample
         if val_acc > previous_acc or (val_acc == previous_acc and val_loss < previous_loss):
             acc_best = val_acc
+            best_ture_label.clear()
+            best_predict_label.clear()
+            best_ture_label.extend(ture_label)
+            best_predict_label.extend(predict_label)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': net.state_dict(),
@@ -123,13 +143,15 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
         print('[%d, %5d] val loss: %.5f, accuracy: %.5f' % (epoch + 1, i + 1, val_loss, val_acc))
         history['acc_validation'].append(val_acc)
         history['loss_validation'].append(val_loss)
+        ture_label.clear()
+        predict_label.clear()
     return acc_best
 
 
 def five_fold_validation(device):
     acc_history = []
     for fold in range(5):
-        net = DRAI_2DCNNLSTM_DI_GESTURE()
+        net = DRAI_2DCNNLSTM_DI_GESTURE_BETA()
         net = net.to(device)
 
         optimizer = optim.Adam(net.parameters(), lr=learning_rate)
@@ -190,7 +212,7 @@ def cross_position(device):
         print('=====================position{} for test acc_history:{}================='.format(p + 1, acc_history))
 
 if __name__ == '__main__':
-    learning_rate = 0.0001
+    learning_rate = 0.0003
     LPP_lr = 0  # .001
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
