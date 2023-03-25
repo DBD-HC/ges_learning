@@ -162,8 +162,14 @@ class di_gesture_dataset(Dataset):
     def __getitem__(self, index):
         DRAI = np.zeros((self.max_frame, 32, 32))
         d = np.load(os.path.join(root, self.file_names[index]))
-        DRAI[:len(d)] = d
-        return torch.from_numpy(d), torch.tensor(self.labels[index])
+        gap = self.max_frame / len(d)
+        temp = 0
+        for i, v in enumerate(d):
+            DRAI[math.floor(temp), :, :] = d[i, :, :]
+            temp = temp + gap
+        # DRAI[:len(d)] = d
+        DRAI_len = len(d)
+        return torch.from_numpy(DRAI), torch.tensor(self.labels[index]), DRAI_len
 
     def __len__(self):
         return self.len

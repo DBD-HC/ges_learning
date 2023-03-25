@@ -219,6 +219,7 @@ class SIGNAL_NET_BETA(nn.Module):
         x = self.fc_2(x)
         x = self.fc_3(x)
         x = torch.transpose(x, 1, 2)
+        x = x.contiguous()
         x = x.view(-1, 1, 32, 32)
         x = self.conv1(x)
         x = self.bn1(x)
@@ -243,10 +244,12 @@ class DRAI_2DCNNLSTM_DI_GESTURE_BETA(nn.Module):
         # self.flatten = nn.Flatten
         self.softmax = nn.Softmax(dim=1)
 
-    def forward(self, x, data_length):
+    def forward(self, x):
+        bach_size = len(x)
         x = self.sn(x)
-        x = x.view(len(data_length), -1, 4096)
-        x = pack_padded_sequence(x, data_length, batch_first=True)
+        # x = x.view(len(data_length), -1, 4096)
+        x = x.view(bach_size, -1, 4096)
+        # x = pack_padded_sequence(x, data_length, batch_first=True)
         output, (h_n, c_n) = self.lstm(x)
         # output, out_len = pad_packed_sequence(output, batch_first=True)
         x = h_n[-1]

@@ -70,7 +70,7 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
     testloader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False,
                                              num_workers=8,
                                              pin_memory=True)
-    total_epoch = 70
+    total_epoch = 110
     model_name = 'test.pth'
     acc_best = 0
     previous_acc = 0
@@ -83,11 +83,13 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
         running_loss = 0.0
         all_sample = 0.0
         correct_sample = 0.0
+        #for i, (datas, labels, data_lengths) in enumerate(trainloader):
         for i, (datas, labels, data_lengths) in enumerate(trainloader):
             datas = datas.to(device)
             labels = labels.to(device)
             optimizer.zero_grad()
-            output = net(datas.float(), data_lengths)
+            #output = net(datas.float(), data_lengths)
+            output = net(datas.float())
             loss = criterion(output, labels)
             loss.backward()
             optimizer.step()
@@ -112,10 +114,12 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
         val_correct_sample = 0.0
         with torch.no_grad():
             for i, (datas, labels, data_lengths) in enumerate(testloader):
+            #for i, (datas, labels, data_lengths) in enumerate(testloader):
                 ture_label.extend([x.item() for x in labels])
                 datas = datas.to(device)
                 labels = labels.to(device)
-                output = net(datas.float(), data_lengths)
+                # output = net(datas.float(), data_lengths)
+                output = net(datas.float())
                 loss = criterion(output, labels)
                 validation_loss += loss.item() * len(labels)
                 val_all_sample = val_all_sample + len(labels)
@@ -212,7 +216,7 @@ def cross_position(device):
         print('=====================position{} for test acc_history:{}================='.format(p + 1, acc_history))
 
 if __name__ == '__main__':
-    learning_rate = 0.0003
+    learning_rate = 0.0001
     LPP_lr = 0  # .001
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
