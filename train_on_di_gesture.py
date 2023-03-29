@@ -15,6 +15,7 @@ history = {"acc_train": [], "acc_validation": [], "loss_train": [], "loss_valida
 best_ture_label = []
 best_predict_label = []
 
+
 def plot_result(file_name):
     # 绘制准确率变化图
     plt.plot(history['acc_train'])
@@ -61,15 +62,17 @@ def collate_fn(datas_and_labels):
     labels = torch.stack([item[1] for item in datas_and_labels])
     data_lengths = [len(x) for x in datas]
     datas = pad_sequence(datas, batch_first=True, padding_value=0)
-    return datas, labels, data_lengths
+    return datas, labels, torch.tensor(data_lengths)
 
 
 def train(net, optimizer, criterion, train_set, test_set, batch_size):
     trainloader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=8,
-                                              pin_memory=True)
+                                              pin_memory=True,
+                                              collate_fn=collate_fn)
     testloader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False,
                                              num_workers=8,
-                                             pin_memory=True)
+                                             pin_memory=True,
+                                             collate_fn=collate_fn)
     total_epoch = 110
     model_name = 'test.pth'
     acc_best = 0
@@ -83,13 +86,14 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
         running_loss = 0.0
         all_sample = 0.0
         correct_sample = 0.0
-        #for i, (datas, labels, data_lengths) in enumerate(trainloader):
+        # for i, (datas, labels, data_lengths) in enumerate(trainloader):
         for i, (datas, labels, data_lengths) in enumerate(trainloader):
             datas = datas.to(device)
             labels = labels.to(device)
+            # data_lengths = data_lengths.to(device)
             optimizer.zero_grad()
-            #output = net(datas.float(), data_lengths)
-            output = net(datas.float())
+            output = net(datas.float(), data_lengths)
+            # output = net(datas.float())
             loss = criterion(output, labels)
             loss.backward()
             optimizer.step()
@@ -114,12 +118,13 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
         val_correct_sample = 0.0
         with torch.no_grad():
             for i, (datas, labels, data_lengths) in enumerate(testloader):
-            #for i, (datas, labels, data_lengths) in enumerate(testloader):
+                # for i, (datas, labels, data_lengths) in enumerate(testloader):
                 ture_label.extend([x.item() for x in labels])
                 datas = datas.to(device)
                 labels = labels.to(device)
-                # output = net(datas.float(), data_lengths)
-                output = net(datas.float())
+                # data_lengths = data_lengths.to(device)
+                output = net(datas.float(), data_lengths)
+                # output = net(datas.float())
                 loss = criterion(output, labels)
                 validation_loss += loss.item() * len(labels)
                 val_all_sample = val_all_sample + len(labels)
@@ -199,6 +204,7 @@ def cross_environment(device):
         plot_result('env_{}'.format(e))
         print('=====================env{} for test acc_history:{}================='.format(e + 1, acc_history))
 
+
 def cross_position(device):
     acc_history = []
     for p in range(len(locations)):
@@ -214,6 +220,7 @@ def cross_position(device):
         acc_history.append(acc)
         plot_result('position_{}'.format(p))
         print('=====================position{} for test acc_history:{}================='.format(p + 1, acc_history))
+
 
 if __name__ == '__main__':
     learning_rate = 0.0001

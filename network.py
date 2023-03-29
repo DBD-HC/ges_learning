@@ -7,6 +7,7 @@ from cplxmodule.nn import RealToCplx, CplxToReal
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 from torch.autograd import Variable
 import torch.nn as nn
+# from d2l import torch as d2l
 import torch.nn.functional as F
 
 
@@ -173,10 +174,121 @@ class STN3d(nn.Module):
         return x
 
 
+def masked_softmax(inputs, valid_length):
+    if valid_length is None:
+        return nn.functional.softmax(inputs, dim=-1)
+    else:
+        shape = inputs.shape
+        if valid_length.dim() == 1:
+            valid_length = torch.repeat_interleave(valid_length, shape[-2], dim=0)
+        else:
+            valid_length = valid_length.reshape(-1)
+        mask = torch.arange((shape[-1]), dtype=torch.float32, device=inputs.device)
+        valid_length = valid_length.to(inputs.device)
+        mask = mask[None, :] >= valid_length[:, None]
+        inputs = inputs.reshape(-1, shape[-1])
+        inputs[mask] = -1e9
+        return nn.functional.softmax(inputs.reshape(shape), dim=-1)
+
+
+class DotProductAttention(nn.Module):
+    def __init__(self, dropout):
+        super(DotProductAttention, self).__init__()
+        self.dropout = dropout
+
+    def forward(self, queries, keys, values, valid_length):
+        d = queries.shape[-1]
+        scores = torch.bmm(queries, torch.transpose(keys, 1, 2)) / (d ** 0.5)
+        self.attention_weights = masked_softmax(scores, valid_length)
+        return torch.bmm(self.dropout(self.attention_weights), values)
+
+
+def split_by_heads(x, num_heads):
+    x = x.reshape(x.shape[0], x.shape[1], num_heads, -1)
+    x = torch.transpose(x, 1, 2)
+    return x.reshape(-1, x.shape[2], x.shape[3])
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, key_size, query_size, value_size, num_hidden, num_heads, dropout, bias=False):
+        super(MultiHeadAttention, self).__init__()
+        self.num_heads = num_heads
+        self.attention = DotProductAttention(dropout)
+        self.w_q = nn.Linear(query_size, num_hidden, bias=bias)
+        self.w_k = nn.Linear(key_size, num_hidden, bias=bias)
+        self.w_v = nn.Linear(value_size, num_hidden, bias=bias)
+        self.w_o = nn.Linear(num_hidden, num_hidden, bias=bias)
+
+    def forward(self, queries, keys, values, valid_lens):
+        queries = split_by_heads(self.w_q(queries), self.num_heads)
+        keys = split_by_heads(self.w_k(keys), self.num_heads)
+        values = split_by_heads(self.w_v(values), self.num_heads)
+        if valid_lens is not None:
+            valid_lens = torch.repeat_interleave(valid_lens, self.num_heads, dim=0)
+        outputs = self.attention(queries, keys, values, valid_lens)
+        outputs = outputs.reshape(-1, self.num_heads, outputs.shape[1], outputs.shape[2])
+        outputs = torch.transpose(outputs, 1, 2)
+        return outputs.reshape(outputs.shape[0], outputs.shape[1], -1)
+
+
+def os_cfar_detect(signal, guard_band_size, window_size, threshold_factor):
+    targets = []
+    num_rows, num_cols = signal.shape
+
+    for row in range(num_rows):
+        for col in range(num_cols):
+            # Calculate indices of window
+            row_start = max(0, row - window_size[0] // 2)
+            row_end = min(num_rows, row + window_size[0] // 2 + 1)
+            col_start = max(0, col - window_size[1] // 2)
+            col_end = min(num_cols, col + window_size[1] // 2 + 1)
+
+            # Calculate indices of guard band
+            guard_band_start = max(0, col - guard_band_size)
+            guard_band_end = min(num_cols, col + guard_band_size + 1)
+
+            # Calculate number of training cells
+            num_training_cells = (row_end - row_start) * (guard_band_end - guard_band_start) - 1
+
+            # Calculate threshold
+            sorted_signal = np.sort(signal[row_start:row_end, guard_band_start:guard_band_end].flatten())
+            threshold = sorted_signal[num_training_cells] * threshold_factor
+
+            # Check if signal is above threshold
+            if signal[row, col] > threshold:
+                targets.append((row, col))
+
+    return targets
+
+
+class CFAR(nn.Module):
+    def __init__(self, window_size):
+        super(CFAR, self).__init__()
+        if isinstance(window_size, tuple):
+            padding = ((window_size[1] - 1) / 2, (window_size[2] - 1) / 2)
+            # conv_weight = torch.ones(window_size, dtype=torch.float32)
+            # guard_size = (window_size[1] + 1) * (window_size[2] + 1) / 4
+        else:
+            padding = (window_size - 1) / 2
+            # conv_weight = torch.ones((window_size, window_size), dtype=torch.float32)
+            # guard_size = (window_size + 1)**2 / 4
+
+        # conv_weight = conv_weight / guard_size
+        self.conv1 = nn.Conv2d(1, 1, padding=padding, padding_mode='circular', kernel_size=window_size)
+
+        # self.conv1.weight = torch.from_numpy(conv_weight)
+
+    def forward(self, x):
+        thr = self.conv1(x)
+        x = x - thr
+        x = torch.tanh(x)
+        return x
+
+
 class SIGNAL_NET(nn.Module):
     def __init__(self):
         super(SIGNAL_NET, self).__init__()
-        self.conv1 = nn.Conv2d(1, 16, kernel_size=(16, 1))
+        self.conv1 = nn.Conv2d(2, 16, kernel_size=(16, 1))
         self.bn1 = nn.BatchNorm2d(16)
         self.conv2 = nn.Conv2d(16, 32, kernel_size=(8, 1))
         self.bn2 = nn.BatchNorm2d(32)
@@ -201,29 +313,31 @@ class SIGNAL_NET(nn.Module):
 class SIGNAL_NET_BETA(nn.Module):
     def __init__(self):
         super(SIGNAL_NET_BETA, self).__init__()
-        self.fc_1 = nn.Linear(128, 256)
-        self.fc_2 = nn.Linear(256, 128)
-        self.fc_3 = nn.Linear(128, 64)
-        self.conv1 = nn.Conv2d(1, 16, kernel_size=(16, 1))
-        self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=(8, 1))
-        self.bn2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 64, kernel_size=(4, 1))
-        self.bn3 = nn.BatchNorm2d(64)
+        self.CFAR = CFAR(15)
+        # self.fc_1 = nn.Linear(128, 64)
+        # self.fc_2 = nn.Linear(64, 32)
+        self.conv1 = nn.Conv2d(2, 8, kernel_size=(3, 3))
+        self.bn1 = nn.BatchNorm2d(8)
+        self.conv2 = nn.Conv2d(8, 16, kernel_size=(3, 3))
+        self.bn2 = nn.BatchNorm2d(16)
+        self.conv3 = nn.Conv2d(16, 32, kernel_size=(3, 3))
+        self.bn3 = nn.BatchNorm2d(32)
         self.maxpool = nn.MaxPool2d(2, ceil_mode=True)
 
     def forward(self, x):
-        x = x.view(-1, 128, 32*32)
-        x = torch.transpose(x, 1, 2)
-        x = self.fc_1(x)
-        x = self.fc_2(x)
-        x = self.fc_3(x)
-        x = torch.transpose(x, 1, 2)
-        x = x.contiguous()
+        # x = x.view(-1, 128, 32*32)
+        # x = torch.transpose(x, 1, 2)
+        # x = self.fc_1(x)
+        # x = self.fc_2(x)
+        # x = torch.transpose(x, 1, 2)
+        # x = x.contiguous()
         x = x.view(-1, 1, 32, 32)
+        detect = self.CFAR(x)
+        x = torch.cat((x, detect), dim=1)
+        x = x.contiguous()
         x = self.conv1(x)
         x = self.bn1(x)
-        # x = self.maxpool(x)
+        x = self.maxpool(x)
         x = self.conv2(x)
         x = self.bn2(x)
         # x = self.maxpool(x)
@@ -232,31 +346,38 @@ class SIGNAL_NET_BETA(nn.Module):
         x = self.maxpool(x)
         return x
 
+
 class DRAI_2DCNNLSTM_DI_GESTURE_BETA(nn.Module):
     def __init__(self):
         super(DRAI_2DCNNLSTM_DI_GESTURE_BETA, self).__init__()
         self.sn = SIGNAL_NET_BETA()
-        self.lstm = nn.LSTM(input_size=4096, hidden_size=128, num_layers=1, batch_first=True)
-
-        # self.fc_2 = nn.Linear(128, 64)
+        self.lstm = nn.LSTM(input_size=1152, hidden_size=128, num_layers=1, batch_first=True)
+        self.multi_head_attention = MultiHeadAttention(query_size=128, key_size=128, value_size=128, num_hidden=128,
+                                                       num_heads=4, dropout=nn.Dropout(p=0.5))
         self.dropout = nn.Dropout(p=0.5)
-        self.fc_3 = nn.Linear(128, 13)
+        self.fc_3 = nn.Linear(16384, 512)
+        self.fc_2 = nn.Linear(512, 128)
+        self.fc_1 = nn.Linear(128, 13)
         # self.flatten = nn.Flatten
         self.softmax = nn.Softmax(dim=1)
 
-    def forward(self, x):
+    def forward(self, x, data_length):
         bach_size = len(x)
         x = self.sn(x)
-        # x = x.view(len(data_length), -1, 4096)
-        x = x.view(bach_size, -1, 4096)
-        # x = pack_padded_sequence(x, data_length, batch_first=True)
+        x = x.view(bach_size, -1, 1152)
+        x = pack_padded_sequence(x, data_length, batch_first=True)
         output, (h_n, c_n) = self.lstm(x)
-        # output, out_len = pad_packed_sequence(output, batch_first=True)
-        x = h_n[-1]
+        output, out_len = pad_packed_sequence(output, total_length=128, batch_first=True)
+        x = self.multi_head_attention(output, output, output, out_len)
 
-        # x = self.fc_2(x)
         x = self.dropout(x)
+        x = x.view(bach_size, -1)
         x = self.fc_3(x)
+        x = F.relu(x)
+        x = self.fc_2(x)
+        x = self.dropout(x)
+        x = F.relu(x)
+        x = self.fc_1(x)
         x = self.softmax(x)
 
         return x
@@ -300,7 +421,6 @@ class DRAI_2DCNNLSTM_DI_GESTURE(nn.Module):
         # output, out_len = pad_packed_sequence(output, batch_first=True)
         x = h_n[-1]
 
-        # x = self.fc_2(x)
         x = self.dropout(x)
         x = self.fc_3(x)
         x = self.softmax(x)
@@ -895,5 +1015,5 @@ class RDAT_3DCNNLSTM(nn.Module):
 
 if __name__ == '__main__':
     net = DRAI_2DCNNLSTM_DI_GESTURE_DENOISE()
-    inputs = torch.zeros((128, 128, 32, 32))
-    net.forward(inputs, np.random.random(size=(1, 127, 128)))
+    ipt = torch.zeros((128, 128, 32, 32))
+    net.forward(ipt, np.random.random(size=(1, 127, 128)))
