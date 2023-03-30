@@ -73,7 +73,7 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
                                              num_workers=8,
                                              pin_memory=True,
                                              collate_fn=collate_fn)
-    total_epoch = 110
+    total_epoch = 150
     model_name = 'test.pth'
     acc_best = 0
     previous_acc = 0

@@ -260,29 +260,48 @@ def os_cfar_detect(signal, guard_band_size, window_size, threshold_factor):
 
     return targets
 
+def init_weight(window_size, sigma = 6):
+
+    if isinstance(window_size, tuple):
+        half_x = window_size[0]//2
+        half_y = window_size[1]//2
+    else:
+        half_x = window_size // 2
+        half_y = half_x
+    x = np.array([i if i <= half_x else window_size - i - 1 for i in range(window_size)])
+    y = np.array([i if i <= half_y else window_size - i - 1 for i in range(window_size)])
+    x, y = np.meshgrid(x, y)
+    gaussian_kernel = np.exp(-(x ** 2 + y ** 2) / (2 * sigma ** 2))
+
+    # 对高斯核进行归一化
+    gaussian_kernel = gaussian_kernel / np.sum(gaussian_kernel)
+
+    return gaussian_kernel
+
 
 class CFAR(nn.Module):
     def __init__(self, window_size):
         super(CFAR, self).__init__()
         if isinstance(window_size, tuple):
-            padding = ((window_size[1] - 1) / 2, (window_size[2] - 1) / 2)
-            # conv_weight = torch.ones(window_size, dtype=torch.float32)
-            # guard_size = (window_size[1] + 1) * (window_size[2] + 1) / 4
+            padding = ((window_size[1] - 1) // 2, (window_size[2] - 1) // 2)
         else:
-            padding = (window_size - 1) / 2
-            # conv_weight = torch.ones((window_size, window_size), dtype=torch.float32)
-            # guard_size = (window_size + 1)**2 / 4
+            padding = (window_size - 1) // 2
 
-        # conv_weight = conv_weight / guard_size
+        # conv_weight = torch.from_numpy(init_weight(window_size, 6)).unsqueeze(0).unsqueeze(0)
         self.conv1 = nn.Conv2d(1, 1, padding=padding, padding_mode='circular', kernel_size=window_size)
-
-        # self.conv1.weight = torch.from_numpy(conv_weight)
+        # self.conv1.weight = torch.nn.Parameter(conv_weight.float())
+        self.bn1 = nn.BatchNorm2d(1)
+        self.sigmoid = torch.nn.Sigmoid()
 
     def forward(self, x):
         thr = self.conv1(x)
-        x = x - thr
-        x = torch.tanh(x)
-        return x
+        thr = x - thr
+        thr = self.bn1(thr)
+        x = self.sigmoid(thr)
+        x = x.view(-1, 32, 32)
+        thr = thr.view(-1, 32, 32)
+        x = torch.bmm(x, thr)
+        return x.view(-1, 1, 32, 32)
 
 
 class SIGNAL_NET(nn.Module):
@@ -313,7 +332,7 @@ class SIGNAL_NET(nn.Module):
 class SIGNAL_NET_BETA(nn.Module):
     def __init__(self):
         super(SIGNAL_NET_BETA, self).__init__()
-        self.CFAR = CFAR(15)
+        self.CFAR = CFAR(17)
         # self.fc_1 = nn.Linear(128, 64)
         # self.fc_2 = nn.Linear(64, 32)
         self.conv1 = nn.Conv2d(2, 8, kernel_size=(3, 3))
