@@ -6,6 +6,7 @@ from tqdm import tqdm
 import os
 
 root = '/root/autodl-fs'
+root2 = '/root/autodl-nas/dopnet'
 trainDir = 'trainData'
 testDir = 'testData'
 
@@ -28,10 +29,12 @@ samples = {
 }
 
 st = {
-    0: [0, 0],
-    1: [0, 0],
-    2: [0, 0],
-    3: [0, 0]
+    'A': [0, 0, 0, 0],
+    'B': [0, 0, 0, 0],
+    'C': [0, 0, 0, 0],
+    'D': [0, 0, 0, 0],
+    'E': [0, 0, 0, 0],
+    'F': [0, 0, 0, 0]
 }
 
 file_format = 'p{person}_g{ges}_s{sample}.npy'
@@ -45,7 +48,7 @@ def split_raw_train_data(person='A'):
             sample = raw_data["Data_Training"]["Doppler_Signals"][0][0][0][ges][i][0]
             sample = 20 * np.log10(abs(sample) / np.amax(abs(sample)))
             sample = sample.transpose(1, 0)
-            file_name = os.path.join(root, trainDir,
+            file_name = os.path.join(root2, trainDir,
                                      file_format.format(person=person, ges=ges, sample=i))
             np.save(file_name, sample)
 
@@ -63,17 +66,16 @@ def split_raw_test_data():
         inform = str(inform).split()
         person = inform[-1]
         ges = gesture_map[inform[0]]
-        st[int(ges)][1] = max(st[int(ges)][1], int(inform[1]))
-        file_name = os.path.join(root, testDir,
-                                 file_format.format(person=person, ges=ges, sample=st[int(ges)][0]))
+        # st[int(ges)][1] = max(st[int(ges)][1], int(inform[1]))
+        file_name = os.path.join(root2, testDir,
+                                 file_format.format(person=person, ges=ges, sample=st[person][int(ges)]))
         np.save(file_name, sample)
-        st[int(ges)][0] += 1
+        st[person][int(ges)] += 1
 
     print(st)
 
 
-# split_raw_train_data('F')
-split_raw_test_data()
+
 
 train_data_filenames = []
 train_label_list = []
@@ -85,7 +87,7 @@ def get_samples(person, dir, ges):
     index = 0
     file_name = file_format.format(person=person, ges=ges, sample=index)
     samples = []
-    while os.path.exists(os.path.join(root, dir, file_name)):
+    while os.path.exists(os.path.join(root2, dir, file_name)):
         samples.append(file_name)
         index += 1
         file_name = file_format.format(person=person, ges=ges, sample=index)
@@ -120,3 +122,22 @@ class DopnetDataset(Dataset):
 
     def __len__(self):
         return self.len
+
+
+if __name__ == '__main__':
+    train_datas, test_datas = split_dataset()
+    max_frame = 0
+    for it in tqdm(range(10)):
+    # for it in tqdm(range(train_datas.__len__())):
+        data, label = train_datas.__getitem__(it)
+        max_frame = max(max_frame, data.size()[0])
+    for it in tqdm(range(10)):
+    # for it in tqdm(range(test_datas.__len__())):
+        data, label = test_datas.__getitem__(it)
+        max_frame = max(max_frame, data.size()[0])
+
+    print("max_frame{}".format(max_frame))
+    #for p in persons:
+    #    print('======person'+p)
+    #    split_raw_train_data(p)
+    #split_raw_test_data()

@@ -73,7 +73,7 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
                                              num_workers=8,
                                              pin_memory=True,
                                              collate_fn=collate_fn)
-    total_epoch = 150
+    total_epoch = 60
     model_name = 'test.pth'
     acc_best = 0
     previous_acc = 0
@@ -159,15 +159,15 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
 
 def in_domain(device):
     acc_history = []
-    net = DRAI_2DCNNLSTM_DI_GESTURE_BETA()
+    net = DRAI_1DCNNLSTM_DI_GESTURE()
     net = net.to(device)
     optimizer = optim.Adam(net.parameters(), lr=learning_rate)
     criterion = nn.CrossEntropyLoss()
-    batch_size = 128
+    batch_size = 32
     train_set, test_set = split_dataset()
     acc = train(net, optimizer, criterion, train_set, test_set, batch_size)
     acc_history.append(acc)
-    plot_result(0)
+    plot_result('dopnet')
 
 
 if __name__ == '__main__':

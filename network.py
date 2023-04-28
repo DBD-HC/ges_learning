@@ -7,8 +7,9 @@ from cplxmodule.nn import RealToCplx, CplxToReal
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 from torch.autograd import Variable
 import torch.nn as nn
-# from d2l import torch as d2l
+import math
 import torch.nn.functional as F
+import visdom
 
 
 class Range_Fourier_Net(nn.Module):
@@ -135,43 +136,51 @@ class AOA_Fourier_Net(nn.Module):
         return x
 
 
-class STN3d(nn.Module):
-    def __init__(self):
-        super(STN3d, self).__init__()
+class MaskedBatchNorm2d(nn.BatchNorm2d):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1,
+                 affine=True, track_running_stats=True):
+        super(MaskedBatchNorm2d, self).__init__(
+            num_features, eps, momentum, affine, track_running_stats)
 
-        # 定义局部化网络
-        self.localization = nn.Sequential(
-            nn.Conv3d(1, 8, kernel_size=7),
-            nn.MaxPool3d(2, stride=2),
-            nn.ReLU(True),
-            nn.Conv3d(8, 10, kernel_size=5),
-            nn.MaxPool3d(2, stride=2),
-            nn.ReLU(True)
-        )
+    def forward(self, input, padded_length=None, valid_length=None):
+        self._check_input_dim(input)
 
-        # 定义网格生成器
-        self.fc = nn.Sequential(
-            nn.Linear(10 * 3 * 3 * 3, 32),
-            nn.ReLU(True),
-            nn.Linear(32, 3 * 3 * 3)
-        )
+        exponential_average_factor = 0.0
 
-        # 初始化网格生成器的权重和偏置
-        self.fc[2].weight.data.zero_()
-        self.fc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 1, 0, 0, 0, 1], dtype=torch.float))
+        if self.training and self.track_running_stats:
+            if self.num_batches_tracked is not None:
+                self.num_batches_tracked += 1
+                if self.momentum is None:  # use cumulative moving average
+                    exponential_average_factor = 1.0 / float(self.num_batches_tracked)
+                else:  # use exponential moving average
+                    exponential_average_factor = self.momentum
 
-    def forward(self, x):
-        # 提取特征并计算变换矩阵
-        x = self.localization(x)
-        x = x.view(-1, 10 * 3 * 3 * 3)
-        theta = self.fc(x)
-        theta = theta.view(-1, 3, 3, 3)
+        # calculate running estimates
+        if self.training:
+            mask = torch.arange(padded_length, dtype=torch.float32, device=input.device)
+            valid_length = valid_length.to(input.device)
+            mask = mask[None, :] < valid_length[:, None]
+            mask = mask.reshape(-1)
 
-        # 对输入数据进行仿射变换
-        grid = F.affine_grid(theta, x.size())
-        x = F.grid_sample(x, grid)
+            mean = input[mask].mean([0, 2, 3])
+            # use biased var in train
+            var = input[mask].var([0, 2, 3], unbiased=False)
+            n = input.numel() / input.size(1)
+            with torch.no_grad():
+                self.running_mean = exponential_average_factor * mean \
+                                    + (1 - exponential_average_factor) * self.running_mean
+                # update running_var with unbiased var
+                self.running_var = exponential_average_factor * var * n / (n - 1) \
+                                   + (1 - exponential_average_factor) * self.running_var
+        else:
+            mean = self.running_mean
+            var = self.running_var
 
-        return x
+        input = (input - mean[None, :, None, None]) / (torch.sqrt(var[None, :, None, None] + self.eps))
+        if self.affine:
+            input = input * self.weight[None, :, None, None] + self.bias[None, :, None, None]
+
+        return input
 
 
 def masked_softmax(inputs, valid_length):
@@ -228,43 +237,13 @@ class MultiHeadAttention(nn.Module):
         outputs = self.attention(queries, keys, values, valid_lens)
         outputs = outputs.reshape(-1, self.num_heads, outputs.shape[1], outputs.shape[2])
         outputs = torch.transpose(outputs, 1, 2)
-        return outputs.reshape(outputs.shape[0], outputs.shape[1], -1)
+        return self.w_o(outputs.reshape(outputs.shape[0], outputs.shape[1], -1))
 
 
-def os_cfar_detect(signal, guard_band_size, window_size, threshold_factor):
-    targets = []
-    num_rows, num_cols = signal.shape
-
-    for row in range(num_rows):
-        for col in range(num_cols):
-            # Calculate indices of window
-            row_start = max(0, row - window_size[0] // 2)
-            row_end = min(num_rows, row + window_size[0] // 2 + 1)
-            col_start = max(0, col - window_size[1] // 2)
-            col_end = min(num_cols, col + window_size[1] // 2 + 1)
-
-            # Calculate indices of guard band
-            guard_band_start = max(0, col - guard_band_size)
-            guard_band_end = min(num_cols, col + guard_band_size + 1)
-
-            # Calculate number of training cells
-            num_training_cells = (row_end - row_start) * (guard_band_end - guard_band_start) - 1
-
-            # Calculate threshold
-            sorted_signal = np.sort(signal[row_start:row_end, guard_band_start:guard_band_end].flatten())
-            threshold = sorted_signal[num_training_cells] * threshold_factor
-
-            # Check if signal is above threshold
-            if signal[row, col] > threshold:
-                targets.append((row, col))
-
-    return targets
-
-def init_weight(window_size, sigma = 6):
-
+def init_weight(window_size, sigma=6):
     if isinstance(window_size, tuple):
-        half_x = window_size[0]//2
-        half_y = window_size[1]//2
+        half_x = window_size[0] // 2
+        half_y = window_size[1] // 2
     else:
         half_x = window_size // 2
         half_y = half_x
@@ -288,116 +267,229 @@ class CFAR(nn.Module):
             padding = (window_size - 1) // 2
 
         # conv_weight = torch.from_numpy(init_weight(window_size, 6)).unsqueeze(0).unsqueeze(0)
-        self.conv1 = nn.Conv2d(1, 1, padding=padding, padding_mode='circular', kernel_size=window_size)
+        self.conv1 = nn.Conv2d(1, 8, padding=padding, padding_mode='circular', kernel_size=window_size)
+        self.conv2 = nn.Conv2d(8, 8, padding=padding, padding_mode='circular', kernel_size=window_size)
+        self.conv3 = nn.Conv2d(8, 1, padding=padding, padding_mode='circular', kernel_size=window_size)
         # self.conv1.weight = torch.nn.Parameter(conv_weight.float())
-        self.bn1 = nn.BatchNorm2d(1)
-        self.sigmoid = torch.nn.Sigmoid()
+        self.visdom = visdom.Visdom(env='CFAR', port=6006)
+        self.bn1 = MaskedBatchNorm2d(1)
+        self.av_pool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
 
-    def forward(self, x):
+        self.relu = torch.nn.LeakyReLU()
+
+    def forward(self, x, padded_len, valid_len, **kwargs):
         thr = self.conv1(x)
+        thr = self.relu(thr)
+        # thr = self.av_pool(thr)
+        thr = self.conv2(thr)
+        thr = self.relu(thr)
+        # thr = self.av_pool(thr)
+        thr = self.conv3(thr)
+        thr = self.relu(thr)
+        # thr = self.av_pool(thr)
         thr = x - thr
-        thr = self.bn1(thr)
-        x = self.sigmoid(thr)
-        x = x.view(-1, 32, 32)
-        thr = thr.view(-1, 32, 32)
-        x = torch.bmm(x, thr)
-        return x.view(-1, 1, 32, 32)
+        thr = self.bn1(thr, padded_len, valid_len)
+        thr = self.relu(thr)
+
+        if not self.training:
+            indexes = kwargs['indexes']
+            ids = str(kwargs['epoch'] % 10)
+            if 1415 in indexes:
+                index = indexes.index(1415)
+                x_t = x.view(len(valid_len), -1, 32, 32)
+                thr_t = thr.view(len(valid_len), -1, 32, 32)
+                self.visdom.heatmap(x_t[index][0], win=ids + '_origin',
+                                    opts=dict(title='origin' + str(kwargs['epoch'])))
+                self.visdom.heatmap(thr_t[index][0], win=ids + '_cfar_output',
+                                    opts=dict(title='cfar output' + str(kwargs['epoch'])))
+        return thr
 
 
-class SIGNAL_NET(nn.Module):
-    def __init__(self):
-        super(SIGNAL_NET, self).__init__()
-        self.conv1 = nn.Conv2d(2, 16, kernel_size=(16, 1))
-        self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=(8, 1))
-        self.bn2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 64, kernel_size=(4, 1))
-        self.bn3 = nn.BatchNorm2d(64)
-        self.maxpool = nn.MaxPool2d(2, ceil_mode=True)
+# 定义位置编码器
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_seq_len):
+        super(PositionalEncoding, self).__init__()
+        self.d_model = d_model
+        # 创建一个含所有位置的位置编码矩阵
+        position = torch.arange(max_seq_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_seq_len, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        # 将位置编码矩阵注册为模型的可学习参数
+        self.register_buffer('pe', pe)
 
     def forward(self, x):
-        x = x.view(-1, 1, 32, 32)
-        x = self.conv1(x)
-        x = self.bn1(x)
-        # x = self.maxpool(x)
-        x = self.conv2(x)
-        x = self.bn2(x)
-        # x = self.maxpool(x)
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = self.maxpool(x)
+        # 将位置编码矩阵添加到词嵌入上
+        x = x * math.sqrt(self.d_model)
+        seq_len = x.size(1)
+        x = x + self.pe[:, :seq_len]
         return x
 
 
 class SIGNAL_NET_BETA(nn.Module):
-    def __init__(self):
+    def __init__(self, cfar=True):
         super(SIGNAL_NET_BETA, self).__init__()
-        self.CFAR = CFAR(17)
+        self.need_cfar = cfar
         # self.fc_1 = nn.Linear(128, 64)
         # self.fc_2 = nn.Linear(64, 32)
-        self.conv1 = nn.Conv2d(2, 8, kernel_size=(3, 3))
-        self.bn1 = nn.BatchNorm2d(8)
-        self.conv2 = nn.Conv2d(8, 16, kernel_size=(3, 3))
-        self.bn2 = nn.BatchNorm2d(16)
-        self.conv3 = nn.Conv2d(16, 32, kernel_size=(3, 3))
-        self.bn3 = nn.BatchNorm2d(32)
+        self.dp = nn.Dropout(p=0.5)
+        if self.need_cfar:
+            self.CFAR = CFAR(3)
+            self.conv1 = nn.Conv2d(2, 16, kernel_size=(3, 3), padding=1, bias=False)
+        else:
+            self.conv1 = nn.Conv2d(1, 16, kernel_size=(3, 3), padding=1, bias=False)
+        self.bn1 = MaskedBatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=(3, 3), padding=1, bias=False)
+        self.bn2 = MaskedBatchNorm2d(32)
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=(3, 3), padding=1, bias=False)
+        self.bn3 = MaskedBatchNorm2d(64)
         self.maxpool = nn.MaxPool2d(2, ceil_mode=True)
 
-    def forward(self, x):
+    def forward(self, x, data_length, **kwargs):
         # x = x.view(-1, 128, 32*32)
         # x = torch.transpose(x, 1, 2)
         # x = self.fc_1(x)
         # x = self.fc_2(x)
         # x = torch.transpose(x, 1, 2)
         # x = x.contiguous()
+        padded_len = x.size(1)
         x = x.view(-1, 1, 32, 32)
-        detect = self.CFAR(x)
-        x = torch.cat((x, detect), dim=1)
-        x = x.contiguous()
+        if self.need_cfar:
+            detect = self.CFAR(x, padded_len, data_length, **kwargs)
+            x = torch.cat((x, detect), dim=1)
+            x = x.contiguous()
         x = self.conv1(x)
-        x = self.bn1(x)
+        x = self.bn1(x, padded_len, data_length)
+        # x = self.bn1(x)
+        x = F.relu(x)
         x = self.maxpool(x)
         x = self.conv2(x)
-        x = self.bn2(x)
-        # x = self.maxpool(x)
+        x = self.bn2(x, padded_len, data_length)
+        # x = self.bn2(x)
+        x = F.relu(x)
+        x = self.maxpool(x)
         x = self.conv3(x)
-        x = self.bn3(x)
+        x = self.bn3(x, padded_len, data_length)
+        # x = self.bn3(x)
+        x = F.relu(x)
         x = self.maxpool(x)
         return x
 
 
-class DRAI_2DCNNLSTM_DI_GESTURE_BETA(nn.Module):
+class TRACK_NET(nn.Module):
     def __init__(self):
-        super(DRAI_2DCNNLSTM_DI_GESTURE_BETA, self).__init__()
-        self.sn = SIGNAL_NET_BETA()
-        self.lstm = nn.LSTM(input_size=1152, hidden_size=128, num_layers=1, batch_first=True)
-        self.multi_head_attention = MultiHeadAttention(query_size=128, key_size=128, value_size=128, num_hidden=128,
-                                                       num_heads=4, dropout=nn.Dropout(p=0.5))
-        self.dropout = nn.Dropout(p=0.5)
-        self.fc_3 = nn.Linear(16384, 512)
-        self.fc_2 = nn.Linear(512, 128)
-        self.fc_1 = nn.Linear(128, 13)
-        # self.flatten = nn.Flatten
-        self.softmax = nn.Softmax(dim=1)
+        super(TRACK_NET, self).__init__()
+        self.conv1 = nn.Conv2d(1, 8, kernel_size=(3, 3), padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(8)
+        self.conv2 = nn.Conv2d(8, 16, kernel_size=(3, 3), padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(16)
+        self.conv3 = nn.Conv2d(16, 32, kernel_size=(3, 3), padding=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(32)
+        # self.avg_pool = nn.AvgPool2d(2, ceil_mode=True)
+        # self.avg_pool_2 = nn.AvgPool2d(3, stride=1, ceil_mode=True)
+        self.dp = nn.Dropout(p=0.5)
+        self.max_pool = nn.MaxPool2d(2, ceil_mode=True)
+        self.visdom = visdom.Visdom(env='TRACK', port=6006)
+        self.fc_1 = nn.Linear(2048, 128)
+        self.bn4 = nn.BatchNorm1d(128)
 
-    def forward(self, x, data_length):
+    def forward(self, x, **kwargs):
+        o = x.view(-1, 1, 32, 32)
+        x = self.dp(o)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x1 = self.max_pool(x)
+        x = self.conv2(x1)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x2 = self.max_pool(x)
+        x = self.conv3(x2)
+        x = self.bn3(x)
+        x3 = F.relu(x)
+        # x3 = self.avg_pool(x)
+        # x3 = self.max_pool(x3)
+        x = x3.view(x3.size(0), -1)
+        x = self.fc_1(x)
+        x = self.bn4(x)
+        x = F.relu(x)
+
+        if not self.training:
+            indexes = kwargs['indexes']
+            ids = str(kwargs['epoch'] % 5)
+            if 1415 in indexes:
+                index = indexes.index(1415)
+                self.visdom.heatmap(o[index][0], win=ids + '_origin',
+                                    opts=dict(title='origin' + str(kwargs['epoch'])))
+                self.visdom.heatmap(x1[index][0], win=ids + '_x1',
+                                    opts=dict(title='track output x1' + str(kwargs['epoch'])))
+                self.visdom.heatmap(x2[index][0], win=ids + '_x2',
+                                    opts=dict(title='track output x2' + str(kwargs['epoch'])))
+                self.visdom.heatmap(x3[index][0], win=ids + '_x3',
+                                    opts=dict(title='track output x3' + str(kwargs['epoch'])))
+
+        return x
+
+
+class DRAI_2DCNNLSTM_DI_GESTURE_BETA(nn.Module):
+    def __init__(self, cfar=True, track=True):
+        super(DRAI_2DCNNLSTM_DI_GESTURE_BETA, self).__init__()
+        self.sn = SIGNAL_NET_BETA(cfar)
+        self.track = track
+        if track:
+            self.tn = TRACK_NET()
+            # self.fc_3 = nn.Linear(16384, 512)
+            self.fc_2 = nn.Linear(384, 7)
+        else:
+            # self.fc_3 = nn.Linear(16384, 512)
+            self.fc_2 = nn.Linear(256, 7)
+        self.fc_4 = nn.Linear(1024, 256)
+        self.lstm = nn.LSTM(input_size=256, hidden_size=256, num_layers=1, batch_first=True)
+        self.multi_head_attention = MultiHeadAttention(query_size=256, key_size=256, value_size=256, num_hidden=256,
+                                                       num_heads=8, dropout=nn.Dropout(p=0.5))
+        self.bn1 = nn.BatchNorm1d(256)
+        self.dropout = nn.Dropout(p=0.5)
+
+        # self.bn2 = nn.BatchNorm1d(128)
+
+        # self.fc_1 = nn.Linear(128, 7)
+        # self.flatten = nn.Flatten
+        # self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x, tracks, data_length, **kwargs):
         bach_size = len(x)
-        x = self.sn(x)
-        x = x.view(bach_size, -1, 1152)
+        x = self.sn(x, data_length, **kwargs)
+        x = x.view(-1, 1024)
+        x = self.fc_4(x)
+        x = F.leaky_relu(x)
+        x = x.view(bach_size, -1, 256)
+        x = self.dropout(x)
         x = pack_padded_sequence(x, data_length, batch_first=True)
         output, (h_n, c_n) = self.lstm(x)
-        output, out_len = pad_packed_sequence(output, total_length=128, batch_first=True)
-        x = self.multi_head_attention(output, output, output, out_len)
+        output, out_len = pad_packed_sequence(output, batch_first=True)
+        final_state = h_n[-1]
+        final_state = final_state.view(bach_size, 1, -1)
+
+        x = self.multi_head_attention(final_state, output, output, out_len)
+        x = x.view(bach_size, -1)
+        # x = self.dropout(x)
+        # x = self.fc_3(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+
+        if self.track:
+            t = self.tn(tracks, **kwargs)
+            t = t.view(bach_size, -1)
+            # x = self.bn1(x)
+            x = torch.cat((x, t), dim=1)
 
         x = self.dropout(x)
-        x = x.view(bach_size, -1)
-        x = self.fc_3(x)
-        x = F.relu(x)
         x = self.fc_2(x)
-        x = self.dropout(x)
-        x = F.relu(x)
-        x = self.fc_1(x)
-        x = self.softmax(x)
+        # x = F.relu(x)
+        # x = self.fc_1(x)
+        # x = self.softmax(x)
 
         return x
 
@@ -412,12 +504,10 @@ class DRAI_2DCNNLSTM_DI_GESTURE(nn.Module):
         self.conv3 = nn.Conv2d(16, 32, 3)
         self.bn3 = nn.BatchNorm2d(32)
         self.maxpool = nn.MaxPool2d(2, ceil_mode=True)
-        self.lstm = nn.LSTM(input_size=21632, hidden_size=128, num_layers=1, batch_first=True)
-
-        # self.fc_2 = nn.Linear(128, 64)
+        self.lstm = nn.LSTM(input_size=128, hidden_size=128, num_layers=1, batch_first=True)
+        self.fc_2 = nn.Linear(21632, 128)
         self.dropout = nn.Dropout(p=0.5)
-        self.fc_3 = nn.Linear(128, 13)
-        # self.flatten = nn.Flatten
+        self.fc_3 = nn.Linear(128, 7)
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x, data_length):
@@ -425,24 +515,70 @@ class DRAI_2DCNNLSTM_DI_GESTURE(nn.Module):
         x = self.conv1(x)
         x = self.bn1(x)
         x = F.relu(x)
-        # x = self.maxpool(x)
+        x = self.maxpool(x)
         x = self.conv2(x)
         x = self.bn2(x)
         x = F.relu(x)
-        # x = self.maxpool(x)
+        x = self.maxpool(x)
         x = self.conv3(x)
         x = self.bn3(x)
         x = F.relu(x)
-        # x = self.maxpool(x)
-        x = x.view(len(data_length), -1, 21632)
+        x = self.maxpool(x)
+        x = x.view(-1, 21632)
+        x = self.fc_2(x)
+        x = self.dropout(x)
+        x = x.view(len(data_length), -1, 128)
         x = pack_padded_sequence(x, data_length, batch_first=True)
         output, (h_n, c_n) = self.lstm(x)
         # output, out_len = pad_packed_sequence(output, batch_first=True)
         x = h_n[-1]
-
-        x = self.dropout(x)
         x = self.fc_3(x)
-        x = self.softmax(x)
+        # x = self.softmax(x)
+
+        return x
+
+
+class DRAI_1DCNNLSTM_DI_GESTURE(nn.Module):
+    def __init__(self):
+        super(DRAI_1DCNNLSTM_DI_GESTURE, self).__init__()
+        self.conv1 = nn.Conv1d(1, 8, 3)
+        self.bn1 = nn.BatchNorm1d(8)
+        self.conv2 = nn.Conv1d(8, 16, 3)
+        self.bn2 = nn.BatchNorm1d(16)
+        self.conv3 = nn.Conv1d(16, 32, 3)
+        self.bn3 = nn.BatchNorm1d(32)
+        self.maxpool = nn.MaxPool1d(2, ceil_mode=True)
+        self.lstm = nn.LSTM(input_size=128, hidden_size=128, num_layers=1, batch_first=True)
+        self.fc_2 = nn.Linear(3168, 128)
+        self.dropout = nn.Dropout(p=0.5)
+        self.fc_3 = nn.Linear(128, 4)
+        # self.flatten = nn.Flatten
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x, data_length):
+        x = x.view(-1, 1, 800)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.maxpool(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = self.maxpool(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+        x = self.maxpool(x)
+        x = x.view(-1, 3168)
+        x = self.fc_2(x)
+        x = self.dropout(x)
+        x = x.view(len(data_length), -1, 128)
+        x = pack_padded_sequence(x, data_length, batch_first=True)
+        output, (h_n, c_n) = self.lstm(x)
+        # output, out_len = pad_packed_sequence(output, batch_first=True)
+        x = h_n[-1]
+        x = self.fc_3(x)
+        # x = self.softmax(x)
 
         return x
 
