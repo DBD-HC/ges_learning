@@ -93,6 +93,8 @@ def get_samples(person, dir, ges):
         file_name = file_format.format(person=person, ges=ges, sample=index)
     return samples
 
+def data_augmentation(d):
+
 
 def split_dataset():
     for person in persons:
@@ -106,18 +108,25 @@ def split_dataset():
 
     return DopnetDataset(train_data_filenames, train_label_list, trainDir), DopnetDataset(test_data_filenames,
                                                                                           test_label_list, testDir)
-
+file_cache = {}
 
 class DopnetDataset(Dataset):
-    def __init__(self, file_names, labels, dir, max_frames=128):
+    def __init__(self, file_names, labels, dir, transform=None, max_frames=128):
         self.len = len(file_names)
         self.max_frame = max_frames
         self.file_names = np.array(file_names)
         self.dir = dir
         self.labels = np.array(labels)
+        self.transform = transform
+        for name in enumerate(self.file_names):
+            d = np.load(os.path.join(root, self.dir, name))
+            file_cache[name] = d
+
 
     def __getitem__(self, index):
-        d = np.load(os.path.join(root, self.dir, self.file_names[index]))
+        d = file_cache[self.file_names[index]]
+        if self.transform is not None:
+            d = self.transform(d)
         return torch.from_numpy(d), torch.tensor(self.labels[index])
 
     def __len__(self):

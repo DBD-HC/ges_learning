@@ -271,7 +271,7 @@ class CFAR(nn.Module):
         self.conv2 = nn.Conv2d(8, 8, padding=padding, padding_mode='circular', kernel_size=window_size)
         self.conv3 = nn.Conv2d(8, 1, padding=padding, padding_mode='circular', kernel_size=window_size)
         # self.conv1.weight = torch.nn.Parameter(conv_weight.float())
-        self.visdom = visdom.Visdom(env='CFAR', port=6006)
+        # self.visdom = visdom.Visdom(env='CFAR', port=6006)
         self.bn1 = MaskedBatchNorm2d(1)
         self.av_pool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
 
@@ -291,17 +291,17 @@ class CFAR(nn.Module):
         thr = self.bn1(thr, padded_len, valid_len)
         thr = self.relu(thr)
 
-        if not self.training:
-            indexes = kwargs['indexes']
-            ids = str(kwargs['epoch'] % 10)
-            if 1415 in indexes:
-                index = indexes.index(1415)
-                x_t = x.view(len(valid_len), -1, 32, 32)
-                thr_t = thr.view(len(valid_len), -1, 32, 32)
-                self.visdom.heatmap(x_t[index][0], win=ids + '_origin',
-                                    opts=dict(title='origin' + str(kwargs['epoch'])))
-                self.visdom.heatmap(thr_t[index][0], win=ids + '_cfar_output',
-                                    opts=dict(title='cfar output' + str(kwargs['epoch'])))
+        #         if not self.training:
+        #             indexes = kwargs['indexes']
+        #             ids = str(kwargs['epoch'] % 10)
+        #             if 1415 in indexes:
+        #                 index = indexes.index(1415)
+        #                 x_t = x.view(len(valid_len), -1, 32, 32)
+        #                 thr_t = thr.view(len(valid_len), -1, 32, 32)
+        #                 self.visdom.heatmap(x_t[index][0], win=ids + '_origin',
+        #                                     opts=dict(title='origin' + str(kwargs['epoch'])))
+        #                 self.visdom.heatmap(thr_t[index][0], win=ids + '_cfar_output',
+        #                                     opts=dict(title='cfar output' + str(kwargs['epoch'])))
         return thr
 
 
@@ -391,7 +391,7 @@ class TRACK_NET(nn.Module):
         # self.avg_pool_2 = nn.AvgPool2d(3, stride=1, ceil_mode=True)
         self.dp = nn.Dropout(p=0.5)
         self.max_pool = nn.MaxPool2d(2, ceil_mode=True)
-        self.visdom = visdom.Visdom(env='TRACK', port=6006)
+        # self.visdom = visdom.Visdom(env='TRACK', port=6006)
         self.fc_1 = nn.Linear(2048, 128)
         self.bn4 = nn.BatchNorm1d(128)
 
@@ -416,19 +416,19 @@ class TRACK_NET(nn.Module):
         x = self.bn4(x)
         x = F.relu(x)
 
-        if not self.training:
-            indexes = kwargs['indexes']
-            ids = str(kwargs['epoch'] % 5)
-            if 1415 in indexes:
-                index = indexes.index(1415)
-                self.visdom.heatmap(o[index][0], win=ids + '_origin',
-                                    opts=dict(title='origin' + str(kwargs['epoch'])))
-                self.visdom.heatmap(x1[index][0], win=ids + '_x1',
-                                    opts=dict(title='track output x1' + str(kwargs['epoch'])))
-                self.visdom.heatmap(x2[index][0], win=ids + '_x2',
-                                    opts=dict(title='track output x2' + str(kwargs['epoch'])))
-                self.visdom.heatmap(x3[index][0], win=ids + '_x3',
-                                    opts=dict(title='track output x3' + str(kwargs['epoch'])))
+        #         if not self.training:
+        #             indexes = kwargs['indexes']
+        #             ids = str(kwargs['epoch'] % 5)
+        #             if 1415 in indexes:
+        #                 index = indexes.index(1415)
+        #                 self.visdom.heatmap(o[index][0], win=ids + '_origin',
+        #                                     opts=dict(title='origin' + str(kwargs['epoch'])))
+        #                 self.visdom.heatmap(x1[index][0], win=ids + '_x1',
+        #                                     opts=dict(title='track output x1' + str(kwargs['epoch'])))
+        #                 self.visdom.heatmap(x2[index][0], win=ids + '_x2',
+        #                                     opts=dict(title='track output x2' + str(kwargs['epoch'])))
+        #                 self.visdom.heatmap(x3[index][0], win=ids + '_x3',
+        #                                     opts=dict(title='track output x3' + str(kwargs['epoch'])))
 
         return x
 
@@ -505,7 +505,7 @@ class DRAI_2DCNNLSTM_DI_GESTURE(nn.Module):
         self.bn3 = nn.BatchNorm2d(32)
         self.maxpool = nn.MaxPool2d(2, ceil_mode=True)
         self.lstm = nn.LSTM(input_size=128, hidden_size=128, num_layers=1, batch_first=True)
-        self.fc_2 = nn.Linear(21632, 128)
+        self.fc_2 = nn.Linear(288, 128)
         self.dropout = nn.Dropout(p=0.5)
         self.fc_3 = nn.Linear(128, 7)
         self.softmax = nn.Softmax(dim=1)
@@ -524,7 +524,7 @@ class DRAI_2DCNNLSTM_DI_GESTURE(nn.Module):
         x = self.bn3(x)
         x = F.relu(x)
         x = self.maxpool(x)
-        x = x.view(-1, 21632)
+        x = x.view(-1, 288)
         x = self.fc_2(x)
         x = self.dropout(x)
         x = x.view(len(data_length), -1, 128)

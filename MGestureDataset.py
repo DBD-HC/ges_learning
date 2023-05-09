@@ -7,11 +7,15 @@ import os
 from tqdm import tqdm
 import joblib
 from utils import *
+import scipy.io as sio
 
-root = '/root/autodl-fs/m-gesture/short_RangeDoppler'
-gestures = ['knock', 'lswipe', 'rswipe', 'clock', 'anticlock', 'unex']
+# root = '/root/autodl-fs/m-gesture/short_RangeDoppler'
+root = 'D:\\dataset\\M-GestureReleaseData\\long_raw'
+gestures = ['knock', 'lswipe', 'rswipe', 'rotate', 'unex']
 mp4_file_name_format = 'short_RD_{user}_{ges}_ ({s}).mp4'
 file_name_format = 'short_RD_{user}_{ges}_{s}.joblib'
+long_raw_name_format = 'long_raw_{user}_{ges}_{s}.mat'
+users = ['011', '014', '025', '026', '032', '036', '066', '071', '083', '089']
 
 
 # 定义一个下采样的函数
@@ -20,7 +24,7 @@ def downsample(img, w=32, h=32):
 
 
 def data_transform():
-    for d in tqdm(range(120, 121)):
+    for d in tqdm(range(120, 135)):
         filenames_set = set(os.listdir(os.path.join(root, str(d))))
         count = [1, 1, 1, 1, 1, 1]
         for x in filenames_set:
@@ -48,13 +52,13 @@ def data_transform():
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
             # 创建一个空的numpy数组，用于存储所有帧的数据，并定义维度
-            RDI = np.zeros((frame_count, 32, 32, 3), dtype='uint8')
+            RDI = np.zeros((frame_count, 128, 128, 3), dtype='uint8')
 
             # 逐帧读取视频，将每一帧存储到numpy数组中
             for i in range(frame_count):
                 ret, frame = cap.read()
                 if ret:
-                    RDI[i] = downsample(frame, 32, 32)
+                    RDI[i] = downsample(frame, 128, 128)
                 else:
                     break
             print(file_name)
@@ -71,6 +75,7 @@ train_data = []
 train_label = []
 
 file_cache = {}
+
 
 def split_data(u=0):
     if len(train_data) == 0:
@@ -97,7 +102,6 @@ def split_data(u=0):
                 file_cache[name] = d
         print('=======数据集缓存初始化完毕====')
 
-
     data_for_train = []
     label_for_train = []
     data_for_test = []
@@ -111,20 +115,18 @@ def split_data(u=0):
             data_for_test.extend(train_data[i])
             label_for_test.extend(train_label[i])
 
-    return MGestureDataset(data_for_train, label_for_train, transform=data_augmentation), MGestureDataset(data_for_test, label_for_test)
+    return MGestureDataset(data_for_train, label_for_train, transform=data_augmentation), MGestureDataset(data_for_test,
+                                                                                                          label_for_test)
 
 
-static_angle_range = [np.arange(-1, 2), np.arange(-1, 2)]
+static_angle_range = [np.arange(-4, 5), np.arange(-1, 2)]
 static_distance_range = [np.arange(-2, 3), np.arange(-2, 3)]
 
 
 def random_translation(datas, p=0.5):
-    if random.uniform(0, 1) > p:
-        d_distance = random.choice(static_distance_range[0])
-        d_angle = random.choice(static_angle_range[0])
-    else:
-        d_distance = random.choice(static_distance_range[1])
-        d_angle = random.choice(static_angle_range[1])
+    d_distance = random.choice(static_distance_range[0])
+    d_angle = random.choice(static_angle_range[0])
+    d_distance = 0
     shape = datas.shape
     datas = datas.reshape(-1, shape[-2], shape[-1])
     simple_shift(datas, d_distance, d_angle)
@@ -134,14 +136,15 @@ def random_translation(datas, p=0.5):
 def random_track_adjust(d, p=0.5):
     shape = d.shape
     d = d.reshape(-1, shape[-2], shape[-1])
-    x = random.choices([-1, 0 , 1], k=shape[0])
-    y = random.choices([-1, 0 , 1], k=shape[0])
+    x = random.choices([-1, 0, 1], k=shape[0])
+    y = random.choices([-1, 0, 1], k=shape[0])
     x = np.repeat(x, shape[1])
     y = np.repeat(y, shape[1])
     d = simple_shift_list(d, x, y)
-    d = d.reshape(-1, shape[-3],shape[-2],shape[-1])
+    d = d.reshape(-1, shape[-3], shape[-2], shape[-1])
 
     return d
+
 
 gesture_pairs = {
     0: 0,
@@ -160,13 +163,16 @@ def random_reverse(datas, labels, p=0.5):
         labels = gesture_pairs[labels]
     return datas, labels
 
+
 adjust_gap = np.arange(4, 6)
+
+
 def data_augmentation(d, label):
     # d = data_normalization(d)
-    shape=d.shape
-    d = d.reshape(-1,shape[-2],shape[-1])
+    shape = d.shape
+    d = d.reshape(-1, shape[-2], shape[-1])
     d, dis, angle = random_translation(d)
-    d = d.reshape(-1, shape[-3],shape[-2],shape[-1])
+    d = d.reshape(-1, shape[-3], shape[-2], shape[-1])
     # d, label = random_reverse(d, label)
     # d = random_track_adjust(d)
     # gap = random.choice(adjust_gap)
@@ -183,7 +189,6 @@ class MGestureDataset(Dataset):
         self.labels = np.array(labels)
         # self.labels = self.labels[permutation]
         self.transform = transform
-
 
     def __getitem__(self, index):
         d = file_cache[self.file_names[index]]

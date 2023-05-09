@@ -5,8 +5,8 @@ import torch
 from torch.utils.data import Dataset
 import os
 from tqdm import tqdm
-import numpy as np
-import matplotlib.pyplot as plot
+import scipy.io
+import scipy.signal
 import visdom
 from utils import *
 
@@ -140,69 +140,26 @@ def random_translation(datas, position, p=0.5):
     return datas, d_distance, d_angle
 
 
-# rotating matrix
-# cosβ| − sinβ|rx(1 − cosβ) + ry*sinβ
-# sinβ|   cosβ|ry(1 − cosβ) − rx*sinβ
-#    0|      0| 1
-# scaling matrix
-#   γx|      0|sx(1 − γx)
-#    0|     γy|sy(1 − γy)
-#    0|      0| 1
-def get_geometric_transform_mat(rotate_angle, rotate_center, scale_factor, scale_center):
-    cos_b = np.cos(rotate_angle)
-    sin_b = np.sin(rotate_angle)
-    rotate_mat1 = np.array([[cos_b, -sin_b, rotate_center[0] * (1 - cos_b) + rotate_center[1] * sin_b],
-                            [sin_b, cos_b, rotate_center[1] * (1 - cos_b) - rotate_center[1] * sin_b],
-                            [0, 0, 1]])
-    scaling_mat = np.array([[scale_factor[0], 0, scale_center[0] * (1 - scale_factor[0])],
-                            [0, scale_factor[1], scale_center[1] * (1 - scale_factor[1])],
-                            [0, 0, 1]])
-    return rotate_mat1 @ scaling_mat
 
-
-def random_geometric_features(datas):
-    shape = datas.shape
-    datas = datas.reshape(-1, shape[-1] * shape[-2])
-    max_indexes = np.argmax(datas, axis=1)
-    x, y = max_indexes // shape[-1], max_indexes % shape[-1]
-    point_mat = np.stack([x, y, [1] * x.size], 0)
-    distances = x ** 2 + y ** 2
-    rotating_index = np.argmax(distances)
-    rotate_angle = random.uniform(-np.pi / 12, np.pi / 12)
-    scale_center = (x.sum() / x.size, y.sum() / y.size)
-    scale_factor = (random.uniform(0.8, 1.2), random.uniform(0.8, 1.2))
-    mat = get_geometric_transform_mat(rotate_angle, (x[rotating_index], y[rotating_index]), scale_factor, scale_center)
-    point_mat_new = mat @ point_mat
-    delta_xy = np.around(point_mat_new - point_mat).astype(int)
-    datas = datas.reshape(-1, shape[-1], shape[-2])
-    datas = simple_shift_list(datas, delta_xy[0], delta_xy[1])
-    return datas
-
-
-def data_normalization(d, *args):
-    mean = np.mean(d)
-    var = np.var(d)
-    d = (d - mean) / np.sqrt(var + 1e-9)
-    return d
 
 
 def random_scale_radiated_power(datas, position, distance, angle, p=0.5):
-    if position < locations[3]:
-        if abs(angle) > 10:
-            scale_factor = random.uniform(0.2, 0.8)
-        else:
-            scale_factor = random.uniform(0.4, 1.2)
-    elif position == locations[3]:
-        if angle < 0:
-            scale_factor = random.uniform(1, 1.2)
-        else:
-            scale_factor = random.uniform(0.8, 1)
-    else:
-        if angle > 0:
-            scale_factor = random.uniform(1, 1.2)
-        else:
-            scale_factor = random.uniform(0.8, 1)
-    # scale_factor = random.uniform(0.8, 1.2)
+    #  if position < locations[3]:
+    #         if abs(angle) > 10:
+    #             scale_factor = random.uniform(0.2, 0.8)
+    #         else:
+    #             scale_factor = random.uniform(0.4, 1.2)
+    #     elif position == locations[3]:
+    #         if angle < 0:
+    #             scale_factor = random.uniform(1, 1.2)
+    #         else:
+    #             scale_factor = random.uniform(0.8, 1)
+    #     else:
+    #         if angle > 0:
+    #             scale_factor = random.uniform(1, 1.2)
+    #         else:
+    #             scale_factor = random.uniform(0.8, 1)
+    scale_factor = random.uniform(0.8, 1.2)
     datas = scale_factor * data_normalization(datas)
     return datas
 
@@ -236,7 +193,7 @@ def data_augmentation(d, label, position):
     return d, label
 
 
-def get_track(datas):
+def get_track_binary(datas):
     # 获取轨迹
     shape = datas.shape
     datas = datas.reshape(-1, shape[-1] * shape[-2])
@@ -248,6 +205,18 @@ def get_track(datas):
     track[x, y] = 255
     # shape = datas.shape
     # track = np.sum(datas, axis=0)
+    track = data_normalization(track)
+    return track
+
+
+def get_track(datas):
+    d_range = datas.sum(axis=2)
+    x = np.argmax(d_range, axis=1)
+    track = np.zeros((datas.shape[-2], datas.shape[-1]))
+    for i, frame in enumerate(datas):
+        y = np.argmax(frame[x[i]])
+        track[x[i], y] = frame[x[i], y]
+
     track = data_normalization(track)
     return track
 

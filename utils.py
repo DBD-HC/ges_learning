@@ -3,6 +3,45 @@ import random
 
 data_len_adjust_gap = np.arange(2, 5)
 
+# rotating matrix
+# cosβ| − sinβ|rx(1 − cosβ) + ry*sinβ
+# sinβ|   cosβ|ry(1 − cosβ) − rx*sinβ
+#    0|      0| 1
+# scaling matrix
+#   γx|      0|sx(1 − γx)
+#    0|     γy|sy(1 − γy)
+#    0|      0| 1
+def get_geometric_transform_mat(rotate_angle, rotate_center, scale_factor, scale_center):
+    cos_b = np.cos(rotate_angle)
+    sin_b = np.sin(rotate_angle)
+    rotate_mat1 = np.array([[cos_b, -sin_b, rotate_center[0] * (1 - cos_b) + rotate_center[1] * sin_b],
+                            [sin_b, cos_b, rotate_center[1] * (1 - cos_b) - rotate_center[1] * sin_b],
+                            [0, 0, 1]])
+    scaling_mat = np.array([[scale_factor[0], 0, scale_center[0] * (1 - scale_factor[0])],
+                            [0, scale_factor[1], scale_center[1] * (1 - scale_factor[1])],
+                            [0, 0, 1]])
+    return rotate_mat1 @ scaling_mat
+
+
+def random_geometric_features(datas):
+    shape = datas.shape
+    datas = datas.reshape(-1, shape[-1] * shape[-2])
+    max_indexes = np.argmax(datas, axis=1)
+    x, y = max_indexes // shape[-1], max_indexes % shape[-1]
+    point_mat = np.stack([x, y, [1] * x.size], 0)
+    distances = x ** 2 + y ** 2
+    rotating_index = np.argmax(distances)
+    rotate_angle = random.uniform(-np.pi / 12, np.pi / 12)
+    scale_center = (x.sum() / x.size, y.sum() / y.size)
+    scale_factor = (random.uniform(0.8, 1.2), random.uniform(0.8, 1.2))
+    mat = get_geometric_transform_mat(rotate_angle, (x[rotating_index], y[rotating_index]), scale_factor, scale_center)
+    point_mat_new = mat @ point_mat
+    delta_xy = np.around(point_mat_new - point_mat).astype(int)
+    datas = datas.reshape(-1, shape[-1], shape[-2])
+    datas = simple_shift_list(datas, delta_xy[0], delta_xy[1])
+    return datas
+
+
 def data_normalization(d, *args):
     mean = np.mean(d)
     var = np.var(d)

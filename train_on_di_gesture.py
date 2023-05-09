@@ -20,25 +20,6 @@ loss_win = '2_loss'
 vis = visdom.Visdom(env='model_result', port=6006)
 
 
-# vis.line(X=np.array([0]), Y=np.array([0.0]), win=acc_win, name='train_acc',
-#          opts=dict(title='Train/val accuracy', xlabel='Epoch', ylabel='Accuracy'))
-# vis.line(X=np.array([0]), Y=np.array([0.0]), win=acc_win, name='val_acc',
-#          opts=dict(title='Train/val accuracy', xlabel='Epoch', ylabel='Accuracy',
-#                    legend=['Train accuracy', 'Val accuracy']))
-# vis.line(X=np.array([0]), Y=np.array([0.0]), win=loss_win, name='train_loss',
-#          opts=dict(title='Train/val loss', xlabel='Epoch', ylabel='Loss'))
-# vis.line(X=np.array([0]), Y=np.array([0.0]), win=loss_win, name='val_loss',
-#          opts=dict(title='Train/val loss', xlabel='Epoch', ylabel='Loss',
-#                    legend=['Train loss', 'Val loss']))
-
-
-def neg_unify(labels):
-    if isinstance(labels, list):
-        labels = np.array(labels)
-    labels = np.where(labels < 6, labels, 6)
-    return labels
-
-
 def plot_result(file_name):
     # 绘制准确率变化图
     plt.plot(history['acc_train'])
@@ -62,9 +43,7 @@ def plot_result(file_name):
     plt.show()
     plt.clf()
 
-    ture_label = neg_unify(best_ture_label)
-    predict_label = neg_unify(best_predict_label)
-    cm = confusion_matrix(ture_label, predict_label)
+    cm = confusion_matrix(best_ture_label, best_predict_label)
     col_sum = np.sum(cm, axis=0)
     cm = np.round(100 * cm / col_sum[np.newaxis, :], 1)
 
@@ -91,12 +70,6 @@ def collate_fn(datas_and_labels):
     data_lengths = [len(x) for x in datas]
     datas = pad_sequence(datas, batch_first=True, padding_value=0)
     return datas, tracks, labels, torch.tensor(data_lengths), indexes
-
-
-def get_acc_neg_unified(predict_labels, ture_labels):
-    predict_labels = neg_unify(predict_labels)
-    ture_labels = neg_unify(ture_labels)
-    return (predict_labels == ture_labels).sum() / len(predict_labels)
 
 
 def train(net, optimizer, criterion, train_set, test_set, batch_size):
@@ -129,6 +102,7 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
             # data_lengths = data_lengths.to(device)
             optimizer.zero_grad()
             output = net(datas, tracks, data_lengths)
+            # output = net(datas, data_lengths)
             # output = net(datas.float())
             loss = criterion(output, labels)
             loss.backward()
@@ -143,13 +117,13 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
             if i % 5 == 4:  # print every 5 mini-batches
                 print('[Train] [%d, %5d] loss: %.3f, accuracy: %.5f' % (
                     epoch + 1, i + 1, running_loss / (i + 1), correct_sample / all_sample))
-        acc_neg_unified = get_acc_neg_unified(predict_label, ture_label)
+        train_acc = correct_sample / all_sample
+        train_loss = running_loss / len(trainloader)
         print(
-            '[Train] all_samples: %.5f, correct_samples: %.5f,  loss: %.5f, accuracy: %.5f, acc_neg_unified: %.5f ' % (
-                all_sample, correct_sample, running_loss / len(trainloader), correct_sample / all_sample,
-                acc_neg_unified))
-        history['acc_train'].append(correct_sample / all_sample)
-        history['loss_train'].append(running_loss / len(trainloader))
+            '[Train] all_samples: %.5f, correct_samples: %.5f,  loss: %.5f, accuracy: %.5f' % (
+                all_sample, correct_sample, train_loss, train_acc))
+        history['acc_train'].append(train_acc)
+        history['loss_train'].append(train_loss)
         ture_label.clear()
         predict_label.clear()
 
@@ -167,6 +141,7 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
                 tracks = tracks.to(device)
                 # data_lengths = data_lengths.to(device)
                 output = net(datas, tracks, data_lengths, epoch=epoch, indexes=indexes)
+                # output = net(datas, data_lengths)
                 # output = net(datas.float())
                 loss = criterion(output, labels)
                 validation_loss += loss.item()
@@ -175,10 +150,9 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
                 predict_label.extend([x.item() for x in prediction])
                 val_correct_sample += (prediction == labels).sum().float().item()
         val_acc = val_correct_sample / val_all_sample
-        val_acc_neg_unified = get_acc_neg_unified(predict_label, ture_label)
         val_loss = validation_loss / len(testloader)
-        if val_acc_neg_unified > previous_acc or (val_acc_neg_unified == previous_acc and val_loss < previous_loss):
-            acc_best = val_acc_neg_unified
+        if val_acc > previous_acc or (val_acc == previous_acc and val_loss < previous_loss):
+            acc_best = val_acc
             best_ture_label.clear()
             best_predict_label.clear()
             best_ture_label.extend(ture_label)
@@ -189,18 +163,18 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': val_loss
             }, model_name)
-            previous_acc = val_acc_neg_unified
+            previous_acc = val_acc
             previous_loss = val_loss
             print('saved')
         print('[Test] all validation: %.5f, correct validation: %.5f' % (val_all_sample, val_correct_sample))
         print('[Test] val loss: %.5f, accuracy: %.5f, best accuracy: %.5f ' % (
             val_loss, val_acc, acc_best))
 
-        vis.line(X=np.array([epoch + 1]), Y=np.array([[acc_neg_unified, val_acc_neg_unified]]), win=acc_win,
+        vis.line(X=np.array([epoch + 1]), Y=np.array([[train_acc, val_acc]]), win=acc_win,
                  update='append',
                  opts=dict(title='Train/val accuracy', xlabel='Epoch', ylabel='Accuracy',
                            legend=['Train accuracy', 'Val accuracy']))
-        vis.line(X=np.array([epoch + 1]), Y=np.array([[running_loss / len(trainloader), val_loss]]), win=loss_win,
+        vis.line(X=np.array([epoch + 1]), Y=np.array([[train_loss, val_loss]]), win=loss_win,
                  update='append',
                  opts=dict(title='Train/val loss', xlabel='Epoch', ylabel='Loss', legend=['Train loss', 'Val loss']))
 
@@ -213,8 +187,8 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
 
 def five_fold_validation(device):
     acc_history = []
-    for fold in range(5):
-        net = DRAI_2DCNNLSTM_DI_GESTURE_BETA()
+    for fold in range(3, 5):
+        net = DRAI_2DCNNLSTM_DI_GESTURE()
         net = net.to(device)
 
         optimizer = optim.Adam(net.parameters(), lr=learning_rate)
@@ -227,6 +201,7 @@ def five_fold_validation(device):
         acc_history.append(acc)
         plot_result(fold)
         print('=====================fold{} for test acc_history:{}================='.format(fold + 1, acc_history))
+    np.save('indomainacc.npy', np.array(acc_history))
     return acc_history
 
 
@@ -240,12 +215,13 @@ def cross_person(device):
     train_set, test_set = split_data('cross_person')
     acc = train(net, optimizer, criterion, train_set, test_set, batch_size)
     plot_result('cross_person')
+    np.save('personacc.npy', np.array([acc]))
     print('cross person accuracy {}'.format(acc))
 
 
 def cross_environment(device):
     acc_history = []
-    for e in range(len(envs)):
+    for e in range(5, 6):
         net = DRAI_2DCNNLSTM_DI_GESTURE()
         net = net.to(device)
         optimizer = optim.Adam(net.parameters(), lr=learning_rate)
@@ -258,12 +234,14 @@ def cross_environment(device):
         acc_history.append(acc)
         plot_result('env_{}'.format(e))
         print('=====================env{} for test acc_history:{}================='.format(e + 1, acc_history))
+    np.save('envacc.npy', np.array(acc_history))
 
 
 def cross_position(device, loc_range=(0, 5), augmentation=True, need_cfar=True, need_track=True):
     acc_history = []
     for p in range(loc_range[0], loc_range[1]):
         net = DRAI_2DCNNLSTM_DI_GESTURE_BETA(cfar=need_cfar, track=need_track)
+        # net = DRAI_2DCNNLSTM_DI_GESTURE()
         net = net.to(device)
         attention_params = list(map(id, net.multi_head_attention.parameters()))
         if need_cfar:
@@ -294,6 +272,7 @@ def cross_position(device, loc_range=(0, 5), augmentation=True, need_cfar=True, 
         acc_history.append(acc)
         plot_result('position_{}'.format(p))
         print('=====================position{} for test acc_history:{}================='.format(p + 1, acc_history))
+    np.save('posacc.npy', np.array(acc_history))
     return acc_history
 
 
@@ -303,21 +282,24 @@ if __name__ == '__main__':
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # five_fold_validation(device)
+    # cross_person(device)
+    # cross_environment(device)
+    # cross_position(device)
+    acc_full = cross_position(device, augmentation=False)
+    # acc_aug_cfar = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=True, need_track=False)
+    # acc_aug_track = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=False, need_track=True)
+    # acc_aug = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=False, need_track=False)
+    # acc_none = cross_position(device, loc_range=(4, 5), augmentation=False, need_cfar=False, need_track=False)
 
-    acc_full = cross_position(device, loc_range=(4, 5))
-    acc_aug_cfar = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=True, need_track=False)
-    acc_aug_track = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=False, need_track=True)
-    acc_aug = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=False, need_track=False)
-    acc_none = cross_position(device, loc_range=(4, 5), augmentation=False, need_cfar=False, need_track=False)
-
-    vis.bar(
-        X=np.array([[acc_full[0], acc_aug_cfar[0], acc_aug_track[0], acc_aug[0], acc_none[0]]]),
-        win='compare2',# 3个一组
-        opts=dict(
-            stacked=False,  # 不堆叠
-            legend=['full', 'aug_cfar', 'aug_track', 'aug', 'none'],
-            title='标题',  # 标题
-            xlabel='position',  # x 轴
-            ylabel='准确率',  # y轴
-        )
-    )
+    # vis.bar(
+    #         X=np.array([[acc_full[0], acc_aug_cfar[0], acc_aug_track[0], acc_aug[0], acc_none[0]]]),
+    #         win='compare2',  # 3个一组
+    #         opts=dict(
+    #             stacked=False,  # 不堆叠
+    #             legend=['full', 'aug_cfar', 'aug_track', 'aug', 'none'],
+    #             title='标题',  # 标题
+    #             xlabel='position',  # x 轴
+    #             ylabel='准确率',  # y轴
+    #         )
+    #     )
