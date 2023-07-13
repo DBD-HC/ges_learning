@@ -1,7 +1,10 @@
+import math
+
 import numpy as np
 import random
 
 data_len_adjust_gap = np.arange(2, 5)
+
 
 # rotating matrix
 # cosβ| − sinβ|rx(1 − cosβ) + ry*sinβ
@@ -47,6 +50,7 @@ def data_normalization(d, *args):
     var = np.var(d)
     d = (d - mean) / np.sqrt(var + 1e-9)
     return d
+
 
 def random_data_len_adjust_2(datas, p=0.5, gap=None):
     if gap is None:
@@ -145,3 +149,12 @@ def simple_shift(datas, d_distance, d_angle):
         datas[:, :, d_angle:] = datas.min()
 
     return datas
+
+
+def get_after_conv_size(size, kernel_size, layer, dilation=1, padding=0, stride=1, reduction=1):
+    size = (size + 2 * padding - dilation * (kernel_size - 1) - 1) // stride + 1
+    size = math.ceil(size / reduction)
+    if layer == 1:
+        return size
+    else:
+        return get_after_conv_size(size, kernel_size, layer - 1, dilation, padding, stride, reduction)

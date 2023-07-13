@@ -1,6 +1,6 @@
 import numpy as np
 
-from dataset import *
+from data import *
 import torch.optim as optim
 from torch.utils.data import Dataset
 import os

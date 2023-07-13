@@ -1,6 +1,6 @@
-from dataset import *
+from data.air_writing_dataset import *
 import torch.optim as optim
-from network import *
+from model.network import *
 import os
 
 history = {"acc_train": [], "acc_validation": [], "loss_train": [], "loss_validation": []}
@@ -9,7 +9,7 @@ history = {"acc_train": [], "acc_validation": [], "loss_train": [], "loss_valida
 # 定义训练函数
 def train(net, train_loader, val_loader, num_epochs, criterion, optimizer, device):
     val_acc = 0
-    for epoch in range(0, num_epochs):  # loop over the dataset multiple times
+    for epoch in range(0, num_epochs):  # loop over the data multiple times
         net.train()
         running_loss = 0.0
         all_sample = 0.0

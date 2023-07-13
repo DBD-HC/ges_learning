@@ -1,12 +1,8 @@
-import numpy as np
-import torch
-import torch.nn as nn
-from dopnet_dataset import *
+from data.dopnet_dataset import *
 import torch.optim as optim
-from network import *
+from model.network import *
 import matplotlib.pyplot as plt
-import torchvision
-from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
+from torch.nn.utils.rnn import pad_sequence
 import os
 import seaborn as sns
 from sklearn.metrics import confusion_matrix

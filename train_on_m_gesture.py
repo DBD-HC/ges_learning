@@ -1,6 +1,4 @@
-import numpy as np
-
-from MGestureDataset import *
+from data.m_gesture_dataset import *
 import torch.optim as optim
 from torch.utils.data import Dataset
 import os

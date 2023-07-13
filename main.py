@@ -4,7 +4,7 @@ import os
 # import visdom
 import scipy.io as sio
 
-# root = 'D:\\dataset\\Triple Sensor Data\\Button_Press'
+# root = 'D:\\data\\Triple Sensor Data\\Button_Press'
 
 # ph = PyHeat('di_gesture_dataset.py')
 # ph.create_heatmap()
@@ -33,10 +33,8 @@ import scipy.io as sio
 #     for i, x in enumerate(s2):
 #         visdom.heatmap(x, win='2_' + str(i),
 #                        opts=dict(title='Push s = ' + str(i)))
+import torch
 
-# 加载MAT文件
-mat_data = sio.loadmat("D:\\dataset\\M-GestureReleaseData\\short_raw\\008\\short_raw_008_clock_1.mat")
+a = torch.Tensor([[[1, 2, 3, 4], [1, 10, 3, 4], [1, 2, 23, 4]], [[199, 2, 3, 4], [1, 10, 3777, 4], [1, 2, 23, 41]]])
 
-# 输出Mat文件中的变量名和值
-for key in mat_data.keys():
-    print(f"{key} : {mat_data[key]}")
+print(a*a)

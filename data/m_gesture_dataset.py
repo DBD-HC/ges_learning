@@ -10,7 +10,7 @@ from utils import *
 import scipy.io as sio
 
 # root = '/root/autodl-fs/m-gesture/short_RangeDoppler'
-root = 'D:\\dataset\\M-GestureReleaseData\\long_raw'
+root = 'D:\\data\\M-GestureReleaseData\\long_raw'
 gestures = ['knock', 'lswipe', 'rswipe', 'rotate', 'unex']
 mp4_file_name_format = 'short_RD_{user}_{ges}_ ({s}).mp4'
 file_name_format = 'short_RD_{user}_{ges}_{s}.joblib'

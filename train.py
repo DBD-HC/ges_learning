@@ -1,11 +1,7 @@
-import numpy as np
-import torch
-import torch.nn as nn
-from dataset import *
+from data.air_writing_dataset import *
 import torch.optim as optim
-from network import *
+from model.network import *
 import matplotlib.pyplot as plt
-import torchvision
 import os
 
 history = {"acc_train": [], "acc_validation": [], "loss_train": [], "loss_validation": []}
@@ -53,7 +49,7 @@ if __name__ == '__main__':
 
     model_name = 'test.pth'
 
-    for epoch in range(start_epoch, 10):  # loop over the dataset multiple times
+    for epoch in range(start_epoch, 10):  # loop over the data multiple times
         # train
         net.train()
         running_loss = 0.0

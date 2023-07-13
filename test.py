@@ -1,9 +1,6 @@
-import torch
-
-from dataset import *
-from network import *
+from data.air_writing_dataset import *
+from model.network import *
 import matplotlib.pyplot as plt
-import numpy as np
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
 

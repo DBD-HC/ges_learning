@@ -1,6 +1,7 @@
 import itertools
 import random
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 import os
@@ -19,14 +20,28 @@ participants = ['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7', 'u8', 'u9', 'u10', 'u1
                 'u14', 'u15', 'u16', 'u17', 'u18', 'u19', 'u20', 'u21', 'u22', 'u23', 'u24', 'u25']
 locations = ['p1', 'p2', 'p3', 'p4', 'p5']
 
-# root = 'D:\\dataset\\mmWave_cross_domain_gesture_dataset'
-root = '/root/autodl-nas/mmWave_cross_domain_gesture_dataset'
+# root = 'D:\\data\\mmWave_cross_domain_gesture_dataset'
+# root = '/root/autodl-nas/mmWave_cross_domain_gesture_dataset'
+root = '/root/autodl-tmp/dataset/mmWave_cross_domain_gesture_dataset'
 
 st = {'e1': 0, 'e2': 0, 'e3': 0, 'e4': 0, 'e5': 0, 'e6': 0}
 st_act = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0}
 
+train_data_filenames = []
+train_label_list = []
+test_data_filenames = []
+test_label_list = []
+file_cache = {}
+
+
 filenames_set = set(os.listdir(root))
-print('========文件名缓存加载完毕========')
+print('========加载文件缓存========')
+
+# for fn in tqdm(filenames_set):
+#     if fn.endswith('.npy'):
+#         file_cache[fn] = np.load(os.path.join(root, fn))
+
+print('========文件缓存加载完毕========')
 
 
 # file_example n_liftleft_e1_u1_p1_s1.npy
@@ -42,10 +57,7 @@ def check_and_get(prefix):
     return samples
 
 
-train_data_filenames = []
-train_label_list = []
-test_data_filenames = []
-test_label_list = []
+
 
 
 def assign_samples_k_fold(ges_type, samples):
@@ -111,8 +123,9 @@ angle_range = {
     locations[0]: np.arange(-10, 11),
     locations[1]: np.arange(-10, 11),
     locations[2]: np.arange(-10, 11),
-    locations[3]: np.arange(-16, 5),
-    locations[4]: np.arange(-4, 17),
+    locations[3]: np.arange(-4, 17),
+    locations[4]: np.arange(-16, 5),
+    'p6': np.arange(-10, 11),
 }
 
 distance_range = {
@@ -121,6 +134,7 @@ distance_range = {
     locations[2]: np.arange(-15, 5),
     locations[3]: np.arange(-8, 9),
     locations[4]: np.arange(-8, 9),
+    'p6': np.arange(-8, 9),
 }
 
 static_angle_range = [np.arange(-20, 21), np.arange(-6, 7)]
@@ -134,7 +148,6 @@ def random_translation(datas, position, p=0.5):
     else:
         d_distance = random.choice(static_distance_range[1])
         d_angle = random.choice(static_angle_range[1])
-
     # datas = shift(datas, [0, d_distance, 0], cval=datas.min())
     simple_shift(datas, d_distance, d_angle)
     return datas, d_distance, d_angle
@@ -188,7 +201,7 @@ def data_augmentation(d, label, position):
     d, dis, angle = random_translation(d, position)
     d = random_geometric_features(d)
     d, label = random_reverse(d, label)
-    d = random_data_len_adjust_2(d)
+    d = random_data_len_adjust(d)
     d = random_scale_radiated_power(d, position, dis, angle)
     return d, label
 
@@ -212,12 +225,12 @@ def get_track_binary(datas):
 def get_track(datas):
     d_range = datas.sum(axis=2)
     x = np.argmax(d_range, axis=1)
-    track = np.zeros((datas.shape[-2], datas.shape[-1]))
+    track = np.zeros((1, datas.shape[-2], datas.shape[-1]))
     for i, frame in enumerate(datas):
         y = np.argmax(frame[x[i]])
-        track[x[i], y] = frame[x[i], y]
+        track[0, x[i], y] = frame[x[i], y]
 
-    track = data_normalization(track)
+    track[0] = data_normalization(track[0])
     return track
 
 
@@ -227,12 +240,18 @@ def combine(index):
            di_gesture_dataset(train_data_filenames[index], train_label_list[index], data_normalization)
 
 
+pre_domain = ['sos']
+
+def clear_cache():
+    train_data_filenames.clear()
+    train_label_list.clear()
+    test_data_filenames.clear()
+    test_label_list.clear()
+
 def split_data(domain, fold=0, env_index=0, position_index=0):
     file_format = '{act}_{env}_{user}'
+
     if domain == 'in_domain':
-        # if os.path.exists('train_data_filenames.npy'):
-        #     train_data_filenames.extend(np.load('train_data_filenames.npy'))
-        #     train_label_list.extend(np.load('train_label_list.npy'))
         if len(train_data_filenames) == 0:
             train_data_filenames.extend([[], [], [], [], []])
             train_label_list.extend([[], [], [], [], []])
@@ -247,8 +266,6 @@ def split_data(domain, fold=0, env_index=0, position_index=0):
                             for p in locations:
                                 samples = check_and_get(prefix + '_' + p)
                                 assign_samples_k_fold(i, samples)
-            # np.save('train_data_filenames.npy', np.array(train_data_filenames))
-            # np.save('train_label_list.npy', np.array(train_label_list))
         tr, te = combine(fold)
         print('ges and num {}'.format(st_act))
         return tr, te
@@ -300,17 +317,12 @@ class di_gesture_dataset(Dataset):
         self.len = len(file_names)
         self.max_frame = max_frames
         self.file_names = np.array(file_names)
-        self.file_cache = {}
-        # permutation = np.random.permutation(self.len)
-        # self.file_names = self.file_names[permutation]
+
         self.labels = np.array(labels)
         self.labels = np.where(self.labels < 6, labels, 6)
-        # self.labels = self.labels[permutation]
         self.transform = transform
         self.positions = []
         for i, name in enumerate(self.file_names):
-            d = np.load(os.path.join(root, self.file_names[i]))
-            self.file_cache[i] = d
             inf = name.split('_')
             if inf[4] in locations:
                 self.positions.append(inf[4])
@@ -318,9 +330,9 @@ class di_gesture_dataset(Dataset):
                 self.positions.append('p6')
 
     def __getitem__(self, index):
-        d = self.file_cache[index]
+        d = np.load(os.path.join(root, self.file_names[index]))
+        # d = file_cache[self.file_names[index]]
         label = self.labels[index]
-        # d = np.load(os.path.join(root, self.file_names[index]))
         res = self.transform(d, self.labels[index], self.positions[index])
         if isinstance(res, tuple):
             d = res[0]
@@ -336,7 +348,7 @@ class di_gesture_dataset(Dataset):
 
 
 if __name__ == '__main__':
-    train_datas, test_datas = split_data('in_doma2in', 1)
+    train_datas, test_datas = split_data('cross_environment', env_index=3)
     visdom = visdom.Visdom(env='raw-data', port=6006)
     max_frame = 0
     position_set = {}
@@ -359,11 +371,9 @@ if __name__ == '__main__':
     permutation = np.random.permutation(test_datas.__len__())
     for it in tqdm(permutation):
         data, track, label, index = test_datas.__getitem__(it)
-        if label.item() not in label_set:
-            label_set[label.item()] = 0
-        if label_set[label.item()] < 5:
-            label_set[label.item()] += 1
-            visdom.heatmap(track, win=str(label.item()) + '_' + str(label_set[label.item()]),
+        if len(data) < 50:
+            continue
+        visdom.heatmap(data[30], win=str(label.item()),
                            opts=dict(title='label = ' + test_datas.file_names[index]))
 
         max_frame = max(max_frame, data.size()[0])

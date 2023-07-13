@@ -1,13 +1,11 @@
 import numpy as np
-import torch
-import torch.nn as nn
-from di_gesture_dataset import *
+
+from data.di_gesture_dataset import *
 import torch.optim as optim
-from network import *
+from model.network import *
 import matplotlib.pyplot as plt
-import torchvision
 import visdom
-from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
+from torch.nn.utils.rnn import pad_sequence
 import os
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
@@ -72,7 +70,28 @@ def collate_fn(datas_and_labels):
     return datas, tracks, labels, torch.tensor(data_lengths), indexes
 
 
-def train(net, optimizer, criterion, train_set, test_set, batch_size):
+def train(train_set, test_set, start_epoch=37, net=None):
+    if net is None:
+        net = RAIRadarGestureClassifier(cfar=True, track=True, spatial_channels=(8, 16, 32), ra_conv=True,
+                                              track_channels=(4, 8, 16), track_out_size=64, hidden_size=(128, 128),
+                                              ra_feat_size=32, attention=True, cfar_expand_channels=8)
+        net.load_state_dict(torch.load('test_cross_environment_3.pth')['model_state_dict'])
+
+    net = net.to(device)
+    cfar_params = list(map(id, net.sn.CFAR.parameters()))
+    # lstm_nn_params = list(map(id,net.lstm.parameters()))
+    # attention_params = list(map(id, net.multi_head_attention.parameters()))
+    base_params = filter(lambda p: id(p) not in cfar_params, net.parameters())
+    # base_params = filter(lambda p: id(p) not in cfar_params, net.parameters())
+    optimizer = optim.Adam([
+        # {'params': net.parameters()},
+        {'params': base_params},
+        # {'params': net.lstm.parameters()},
+        # {'params': net.mult i_head_attention.parameters()},
+        {'params': net.sn.CFAR.parameters(), 'lr': 0.0001},
+    ], lr=learning_rate)
+    criterion = nn.CrossEntropyLoss()
+
     trainloader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=8,
                                               pin_memory=True,
                                               collate_fn=collate_fn)
@@ -80,15 +99,30 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
                                              num_workers=8,
                                              pin_memory=True,
                                              collate_fn=collate_fn)
-    total_epoch = 200
-    model_name = 'test.pth'
     acc_best = 0
     previous_acc = 0
     previous_loss = 1000000
     ture_label = []
     predict_label = []
-    for epoch in range(total_epoch):
-        # train
+    lr_list = np.zeros(total_epoch)
+    lr_list[:100] = 0.001
+    lr_list[100:150] = 0.0003
+    lr_list[150:] = 0.0001
+    lr_cfar = np.zeros(total_epoch)
+    lr_cfar[:100] = 0.0001
+    lr_cfar[100:150] = 0.00001
+    lr_cfar[150:] = 0.00001
+
+    pre_lr = 0
+    for epoch in range(start_epoch, total_epoch):
+        if not pre_lr == lr_list[epoch]:
+            new_lr = lr_list[epoch]
+            pre_lr = lr_list[epoch]
+            print('!!!更新学习率 lr=' + str(new_lr))
+            optimizer.param_groups[0]['lr'] = new_lr
+            if len(optimizer.param_groups) > 1:
+                optimizer.param_groups[1]['lr'] = lr_cfar[epoch]
+            # train
         net.train()
         running_loss = 0.0
         all_sample = 0.0
@@ -99,7 +133,7 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
             tracks = tracks.to(device)
             labels = labels.to(device)
             ture_label.extend([x.item() for x in labels])
-            # data_lengths = data_lengths.to(device)
+            data_lengths = data_lengths.to(device)
             optimizer.zero_grad()
             output = net(datas, tracks, data_lengths)
             # output = net(datas, data_lengths)
@@ -107,8 +141,8 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
             loss = criterion(output, labels)
             loss.backward()
             optimizer.step()
-            running_loss += loss.item()
-
+            running_loss += loss.item() \
+ \
             # calculation of accuracy
             all_sample = all_sample + labels.size(0)
             prediction = torch.argmax(output, 1)
@@ -139,7 +173,7 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
                 datas = datas.to(device)
                 labels = labels.to(device)
                 tracks = tracks.to(device)
-                # data_lengths = data_lengths.to(device)
+                data_lengths = data_lengths.to(device)
                 output = net(datas, tracks, data_lengths, epoch=epoch, indexes=indexes)
                 # output = net(datas, data_lengths)
                 # output = net(datas.float())
@@ -163,6 +197,9 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': val_loss
             }, model_name)
+            torch.save({
+                'model_state_dict': net.state_dict(),
+            }, 'final_model.pth')
             previous_acc = val_acc
             previous_loss = val_loss
             print('saved')
@@ -185,19 +222,11 @@ def train(net, optimizer, criterion, train_set, test_set, batch_size):
     return acc_best
 
 
-def five_fold_validation(device):
+def five_fold_validation(fold_range=(0, 5)):
     acc_history = []
-    for fold in range(3, 5):
-        net = DRAI_2DCNNLSTM_DI_GESTURE()
-        net = net.to(device)
-
-        optimizer = optim.Adam(net.parameters(), lr=learning_rate)
-
-        criterion = nn.CrossEntropyLoss()
-
-        batch_size = 128
+    for fold in range(fold_range[0], fold_range[1]):
         train_set, test_set = split_data('in_domain', fold)
-        acc = train(net, optimizer, criterion, train_set, test_set, batch_size)
+        acc = train(train_set, test_set)
         acc_history.append(acc)
         plot_result(fold)
         print('=====================fold{} for test acc_history:{}================='.format(fold + 1, acc_history))
@@ -205,70 +234,33 @@ def five_fold_validation(device):
     return acc_history
 
 
-def cross_person(device):
-    net = DRAI_2DCNNLSTM_DI_GESTURE()
-    net = net.to(device)
-
-    optimizer = optim.Adam(net.parameters(), lr=learning_rate)
-    criterion = nn.CrossEntropyLoss()
-    batch_size = 128
+def cross_person():
     train_set, test_set = split_data('cross_person')
-    acc = train(net, optimizer, criterion, train_set, test_set, batch_size)
+    acc = train(train_set, test_set)
     plot_result('cross_person')
     np.save('personacc.npy', np.array([acc]))
     print('cross person accuracy {}'.format(acc))
 
 
-def cross_environment(device):
+def cross_environment(env_range=(0, 6)):
+    print('cross env')
     acc_history = []
-    for e in range(5, 6):
-        net = DRAI_2DCNNLSTM_DI_GESTURE()
-        net = net.to(device)
-        optimizer = optim.Adam(net.parameters(), lr=learning_rate)
-
-        criterion = nn.CrossEntropyLoss()
-
-        batch_size = 128
+    for e in range(env_range[0], env_range[1]):
         train_set, test_set = split_data('cross_environment', env_index=e)
-        acc = train(net, optimizer, criterion, train_set, test_set, batch_size)
+        acc = train(train_set, test_set)
         acc_history.append(acc)
         plot_result('env_{}'.format(e))
         print('=====================env{} for test acc_history:{}================='.format(e + 1, acc_history))
     np.save('envacc.npy', np.array(acc_history))
 
 
-def cross_position(device, loc_range=(0, 5), augmentation=True, need_cfar=True, need_track=True):
+def cross_position(loc_range=(4, 5), augmentation=True):
     acc_history = []
     for p in range(loc_range[0], loc_range[1]):
-        net = DRAI_2DCNNLSTM_DI_GESTURE_BETA(cfar=need_cfar, track=need_track)
-        # net = DRAI_2DCNNLSTM_DI_GESTURE()
-        net = net.to(device)
-        attention_params = list(map(id, net.multi_head_attention.parameters()))
-        if need_cfar:
-            cfar_params = list(map(id, net.sn.CFAR.parameters()))
-            # lstm_nn_params = list(map(id,net.lstm.parameters()))
-            base_params = filter(lambda p: id(p) not in cfar_params + attention_params, net.parameters())
-            # base_params = filter(lambda p: id(p) not in cfar_params, net.parameters())
-            optimizer = optim.Adam([
-                {'params': base_params},
-                # {'params': net.lstm.parameters()},
-                {'params': net.multi_head_attention.parameters()},
-                {'params': net.sn.CFAR.parameters(), 'lr': 0.0001},
-            ], lr=learning_rate)
-        else:
-            base_params = filter(lambda p: id(p) not in attention_params, net.parameters())
-            optimizer = optim.Adam([
-                {'params': base_params},
-                {'params': net.multi_head_attention.parameters()},
-            ], lr=learning_rate)
-
-        criterion = nn.CrossEntropyLoss()
-
-        batch_size = 64
         train_set, test_set = split_data('cross_position', position_index=p)
         if not augmentation:
             train_set.transform = test_set.transform
-        acc = train(net, optimizer, criterion, train_set, test_set, batch_size)
+        acc = train(train_set, test_set)
         acc_history.append(acc)
         plot_result('position_{}'.format(p))
         print('=====================position{} for test acc_history:{}================='.format(p + 1, acc_history))
@@ -277,16 +269,36 @@ def cross_position(device, loc_range=(0, 5), augmentation=True, need_cfar=True, 
 
 
 if __name__ == '__main__':
-    learning_rate = 0.0003
+    learning_rate = 0.001
     LPP_lr = 0  # .001
+
+    total_epoch = 200
+    batch_size = 128
+    # model_name = 'test.pth'
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    # five_fold_validation(device)
-    # cross_person(device)
+
+    # model_name = 'test.pth'
+    # five_fold_validation(fold_range=(0,3))
+
+    # model_name = 'test_cross_person.pth'
+    # cross_person()
     # cross_environment(device)
-    # cross_position(device)
-    acc_full = cross_position(device, augmentation=False)
+    # clear_cache()
+    model_name = 'test_cross_environment_3.pth'
+    cross_environment(env_range=(5, 6))
+    # cross_environment(env_range=(4, 5))
+    clear_cache()
+    # model_name = 'test_cross_position.pth'
+    # net.load_state_dict(torch.load(model_name)['model_state_dict'])
+    # cross_position((2, 5))
+    # clear_cache()
+    # net.load_state_dict(torch.load('test.pth')['model_state_dict'])
+
+    # net.load_state_dict(torch.load('test.pth')['model_state_dict'])
+    clear_cache()
+    # acc_full = cross_position(device, augmentation=False)
     # acc_aug_cfar = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=True, need_track=False)
     # acc_aug_track = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=False, need_track=True)
     # acc_aug = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=False, need_track=False)

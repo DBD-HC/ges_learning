@@ -18,7 +18,7 @@ test_participants = ['participant4', 'participant12']
 
 data_path = '/root/autodl-nas/'
 
-##data_path = 'D:\\dataset\\air_writing\\'
+##data_path = 'D:\\data\\air_writing\\'
 data_path = '/root/autodl-nas/'
 
 train_data_raw = np.empty((600, 100, 128, 2, 100), dtype=complex)
