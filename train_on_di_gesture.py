@@ -1,4 +1,5 @@
 import numpy as np
+import torchmetrics
 
 from data.di_gesture_dataset import *
 import torch.optim as optim
@@ -9,6 +10,10 @@ from torch.nn.utils.rnn import pad_sequence
 import os
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
+from sklearn.preprocessing import label_binarize
+from sklearn.metrics import roc_auc_score, average_precision_score
+from torchmetrics.classification import MulticlassAccuracy, MulticlassAUROC, MulticlassAveragePrecision
+
 
 history = {"acc_train": [], "acc_validation": [], "loss_train": [], "loss_validation": []}
 best_ture_label = []
@@ -16,6 +21,18 @@ best_predict_label = []
 acc_win = '1_acc'
 loss_win = '2_loss'
 vis = visdom.Visdom(env='model_result', port=6006)
+
+# 定义随机种子固定的函数
+def get_random_seed(seed):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+# 调用函数，设置随机种子为73
+# get_random_seed(73)
 
 
 def plot_result(file_name):
@@ -68,27 +85,31 @@ def collate_fn(datas_and_labels):
     data_lengths = [len(x) for x in datas]
     datas = pad_sequence(datas, batch_first=True, padding_value=0)
     return datas, tracks, labels, torch.tensor(data_lengths), indexes
+    # return datas, labels, torch.tensor(data_lengths), indexes
 
 
-def train(train_set, test_set, start_epoch=37, net=None):
+def train(train_set, test_set, start_epoch=0, net=None):
     if net is None:
-        net = RAIRadarGestureClassifier(cfar=True, track=True, spatial_channels=(8, 16, 32), ra_conv=True,
-                                              track_channels=(4, 8, 16), track_out_size=64, hidden_size=(128, 128),
-                                              ra_feat_size=32, attention=True, cfar_expand_channels=8)
-        net.load_state_dict(torch.load('test_cross_environment_3.pth')['model_state_dict'])
+        net = RAIRadarGestureClassifier(cfar=True, track=True, spatial_channels=(4, 8, 16), ra_conv=True, heads=4,
+                                              track_channels=(6, 8, 16), track_out_size=32, hidden_size=(128, 128),
+                                              ra_feat_size=32, attention=True, cfar_expand_channels=4)
+        # net.load_state_dict(torch.load('test_cross_environment_3.pth')['model_state_dict'])
 
     net = net.to(device)
-    cfar_params = list(map(id, net.sn.CFAR.parameters()))
+    cfar_params = list(map(id, net.CFAR.parameters()))
     # lstm_nn_params = list(map(id,net.lstm.parameters()))
     # attention_params = list(map(id, net.multi_head_attention.parameters()))
     base_params = filter(lambda p: id(p) not in cfar_params, net.parameters())
     # base_params = filter(lambda p: id(p) not in cfar_params, net.parameters())
+
+    test_auc = MulticlassAUROC(num_classes=7, average='macro').to(device)
+    test_ap = MulticlassAveragePrecision(num_classes=7, average='macro').to(device)
     optimizer = optim.Adam([
         # {'params': net.parameters()},
         {'params': base_params},
         # {'params': net.lstm.parameters()},
         # {'params': net.mult i_head_attention.parameters()},
-        {'params': net.sn.CFAR.parameters(), 'lr': 0.0001},
+        {'params': net.CFAR.parameters(), 'lr': 0.0001},
     ], lr=learning_rate)
     criterion = nn.CrossEntropyLoss()
 
@@ -100,6 +121,8 @@ def train(train_set, test_set, start_epoch=37, net=None):
                                              pin_memory=True,
                                              collate_fn=collate_fn)
     acc_best = 0
+    ap_best = 0
+    auc_best = 0
     previous_acc = 0
     previous_loss = 1000000
     ture_label = []
@@ -111,7 +134,7 @@ def train(train_set, test_set, start_epoch=37, net=None):
     lr_cfar = np.zeros(total_epoch)
     lr_cfar[:100] = 0.0001
     lr_cfar[100:150] = 0.00001
-    lr_cfar[150:] = 0.00001
+    lr_cfar[150:] = 0.000001
 
     pre_lr = 0
     for epoch in range(start_epoch, total_epoch):
@@ -127,6 +150,7 @@ def train(train_set, test_set, start_epoch=37, net=None):
         running_loss = 0.0
         all_sample = 0.0
         correct_sample = 0.0
+        # for i, (datas, labels, data_lengths, indexes) in enumerate(trainloader):
         # for i, (datas, labels, data_lengths) in enumerate(trainloader):
         for i, (datas, tracks, labels, data_lengths, indexes) in enumerate(trainloader):
             datas = datas.to(device)
@@ -135,14 +159,14 @@ def train(train_set, test_set, start_epoch=37, net=None):
             ture_label.extend([x.item() for x in labels])
             data_lengths = data_lengths.to(device)
             optimizer.zero_grad()
+            # output = net(datas, data_lengths)
             output = net(datas, tracks, data_lengths)
             # output = net(datas, data_lengths)
             # output = net(datas.float())
             loss = criterion(output, labels)
             loss.backward()
             optimizer.step()
-            running_loss += loss.item() \
- \
+            running_loss += loss.item()
             # calculation of accuracy
             all_sample = all_sample + labels.size(0)
             prediction = torch.argmax(output, 1)
@@ -167,6 +191,7 @@ def train(train_set, test_set, start_epoch=37, net=None):
         val_all_sample = 0.0
         val_correct_sample = 0.0
         with torch.no_grad():
+            # for i, (datas, labels, data_lengths, indexes) in enumerate(testloader):
             for i, (datas, tracks, labels, data_lengths, indexes) in enumerate(testloader):
                 # for i, (datas, labels, data_lengths) in enumerate(testloader):
                 ture_label.extend([x.item() for x in labels])
@@ -175,6 +200,9 @@ def train(train_set, test_set, start_epoch=37, net=None):
                 tracks = tracks.to(device)
                 data_lengths = data_lengths.to(device)
                 output = net(datas, tracks, data_lengths, epoch=epoch, indexes=indexes)
+                #output = net(datas, data_lengths, epoch=epoch, indexes=indexes)
+                test_auc.update(output, labels)
+                test_ap.update(output, labels)
                 # output = net(datas, data_lengths)
                 # output = net(datas.float())
                 loss = criterion(output, labels)
@@ -185,8 +213,12 @@ def train(train_set, test_set, start_epoch=37, net=None):
                 val_correct_sample += (prediction == labels).sum().float().item()
         val_acc = val_correct_sample / val_all_sample
         val_loss = validation_loss / len(testloader)
+        val_auc =  test_auc.compute()
+        val_ap = test_ap.compute()
         if val_acc > previous_acc or (val_acc == previous_acc and val_loss < previous_loss):
             acc_best = val_acc
+            ap_best = val_ap
+            auc_best = val_auc
             best_ture_label.clear()
             best_predict_label.clear()
             best_ture_label.extend(ture_label)
@@ -204,8 +236,8 @@ def train(train_set, test_set, start_epoch=37, net=None):
             previous_loss = val_loss
             print('saved')
         print('[Test] all validation: %.5f, correct validation: %.5f' % (val_all_sample, val_correct_sample))
-        print('[Test] val loss: %.5f, accuracy: %.5f, best accuracy: %.5f ' % (
-            val_loss, val_acc, acc_best))
+        print('[Test] val loss: %.5f, accuracy: %.5f, auc: %.5f, ap: %.5f,  best accuracy: %.5f ' % (
+            val_loss, val_acc, val_auc, val_ap, acc_best))
 
         vis.line(X=np.array([epoch + 1]), Y=np.array([[train_acc, val_acc]]), win=acc_win,
                  update='append',
@@ -219,53 +251,55 @@ def train(train_set, test_set, start_epoch=37, net=None):
         history['loss_validation'].append(val_loss)
         ture_label.clear()
         predict_label.clear()
-    return acc_best
+        test_auc.reset()
+        test_ap.reset()
+    return acc_best, auc_best.cpu().detach().numpy(), ap_best.cpu().detach().numpy()
 
 
 def five_fold_validation(fold_range=(0, 5)):
-    acc_history = []
+    res_history = []
     for fold in range(fold_range[0], fold_range[1]):
         train_set, test_set = split_data('in_domain', fold)
-        acc = train(train_set, test_set)
-        acc_history.append(acc)
+        res = train(train_set, test_set)
+        res_history.append(res)
         plot_result(fold)
-        print('=====================fold{} for test acc_history:{}================='.format(fold + 1, acc_history))
-    np.save('indomainacc.npy', np.array(acc_history))
-    return acc_history
+        print('=====================fold{} for test history:{}================='.format(fold + 1, res_history))
+    np.save('indomainacc.npy', np.array(res_history))
+    return res_history
 
 
 def cross_person():
     train_set, test_set = split_data('cross_person')
-    acc = train(train_set, test_set)
+    res = train(train_set, test_set)
     plot_result('cross_person')
-    np.save('personacc.npy', np.array([acc]))
-    print('cross person accuracy {}'.format(acc))
+    np.save('personacc.npy', np.array([res]))
+    print('cross person accuracy {}'.format(res))
 
 
 def cross_environment(env_range=(0, 6)):
     print('cross env')
-    acc_history = []
+    res_history = []
     for e in range(env_range[0], env_range[1]):
         train_set, test_set = split_data('cross_environment', env_index=e)
-        acc = train(train_set, test_set)
-        acc_history.append(acc)
+        res = train(train_set, test_set)
+        res_history.append(res)
         plot_result('env_{}'.format(e))
-        print('=====================env{} for test acc_history:{}================='.format(e + 1, acc_history))
-    np.save('envacc.npy', np.array(acc_history))
+        print('=====================env{} for test acc_history:{}================='.format(e + 1, res_history))
+    np.save('envacc.npy', np.array(res_history))
 
 
 def cross_position(loc_range=(4, 5), augmentation=True):
-    acc_history = []
+    res_history = []
     for p in range(loc_range[0], loc_range[1]):
         train_set, test_set = split_data('cross_position', position_index=p)
         if not augmentation:
             train_set.transform = test_set.transform
-        acc = train(train_set, test_set)
-        acc_history.append(acc)
+        res = train(train_set, test_set)
+        res_history.append(res)
         plot_result('position_{}'.format(p))
-        print('=====================position{} for test acc_history:{}================='.format(p + 1, acc_history))
-    np.save('posacc.npy', np.array(acc_history))
-    return acc_history
+        print('=====================position{} for test acc_history:{}================='.format(p + 1, res_history))
+    np.save('posacc.npy', np.array(res_history))
+    return res_history
 
 
 if __name__ == '__main__':
@@ -290,14 +324,14 @@ if __name__ == '__main__':
     cross_environment(env_range=(5, 6))
     # cross_environment(env_range=(4, 5))
     clear_cache()
-    # model_name = 'test_cross_position.pth'
+    model_name = 'test_cross_position.pth'
     # net.load_state_dict(torch.load(model_name)['model_state_dict'])
-    # cross_position((2, 5))
-    # clear_cache()
+    cross_position((3, 5))
+    clear_cache()
     # net.load_state_dict(torch.load('test.pth')['model_state_dict'])
 
     # net.load_state_dict(torch.load('test.pth')['model_state_dict'])
-    clear_cache()
+    # clear_cache()
     # acc_full = cross_position(device, augmentation=False)
     # acc_aug_cfar = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=True, need_track=False)
     # acc_aug_track = cross_position(device, loc_range=(4, 5), augmentation=True, need_cfar=False, need_track=True)

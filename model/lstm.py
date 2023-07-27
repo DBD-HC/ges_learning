@@ -100,56 +100,37 @@ class AttentionLstm(nn.Module):
         return outputs, final_state
 
 
-class LSTM(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(LSTM, self).__init__()
+class LSTM_2(nn.Module):
+    def __init__(self, input_size, abstract_size, hidden_size):
+        super(LSTM_2, self).__init__()
+        self.abstract_size = abstract_size
         self.input_size = input_size
         self.hidden_size = hidden_size
+        self.pre_w = nn.Linear(input_size, abstract_size)
+        self.temp_w = nn.Linear(input_size+abstract_size, hidden_size)
+        self.out_w = nn.Linear(hidden_size, hidden_size)
 
-        # 初始化权重和偏置
-        self.weights_ih = torch.Tensor(hidden_size, input_size)
-        self.weights_hh = torch.Tensor(hidden_size, hidden_size)
-        self.bias_ih = torch.Tensor(hidden_size)
-        self.bias_hh = torch.Tensor(hidden_size)
-
-        # 初始化记忆单元的初始状态
-        self.h0 = torch.zeros(hidden_size)
-        self.c0 = torch.zeros(hidden_size)
-
-        # 初始化参数
-        self.weights_ih.requiresGrad = True
-        self.weights_hh.requiresGrad = True
-        self.bias_ih.requiresGrad = True
-        self.bias_hh.requiresGrad = True
-
-    def forward(self, seqs, lengths):
-        seq_len = seqs.size(0)
-        batch_size = seqs.size(1)
+    def forward(self, seqs):
+        seq_len = seqs.size(1)
+        batch_size = seqs.size(0)
+        ab0 = torch.zeros(batch_size, self.abstract_size, device=seqs.device)
 
         hidden_states = []
-        h, c = self.h0.expand(batch_size, -1), self.c0.expand(batch_size, -1)
 
         # 对于每个时间步
         for t in range(seq_len):
-            input_seq = seqs[t]
-
-            # 计算当前时间步的隐藏状态和记忆单元状态
-            gates = torch.mm(self.weights_ih, input_seq) + torch.mm(self.weights_hh, h.t()) + self.bias_ih.unsqueeze(
-                0).expand(batch_size, -1) + self.bias_hh.unsqueeze(0).expand(batch_size, -1)
-            i, f, o, g = gates.chunk(4, dim=1)
-            i = torch.sigmoid(i)
-            f = torch.sigmoid(f)
-            o = torch.sigmoid(o)
-            g = torch.tanh(g)
-
-            c = f * c + i * g
-            h = o * torch.tanh(c)
-
+            input_seq = seqs[:,t,:]
+            temp = torch.cat((ab0, input_seq), dim=-1)
+            temp = self.temp_w(temp)
+            temp = F.hardswish(temp)
             # 将隐藏状态保存到列表中
-            hidden_states.append(h.unsqueeze(0))
+            hidden_states.append(temp[:, None, :])
+            ab0 = self.pre_w(input_seq)
+            ab0 = F.hardswish(ab0)
 
         # 将隐藏状态列表拼接并转换为PackedSequence
-        hidden_states = torch.cat(hidden_states, dim=0)
-        hidden_states = torch.nn.utils.rnn.pack_padded_sequence(hidden_states, lengths)
+        hidden_states = torch.cat(hidden_states, dim=1)
 
         return hidden_states
+
+

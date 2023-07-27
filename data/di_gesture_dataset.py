@@ -223,14 +223,16 @@ def get_track_binary(datas):
 
 
 def get_track(datas):
-    d_range = datas.sum(axis=2)
-    x = np.argmax(d_range, axis=1)
-    track = np.zeros((1, datas.shape[-2], datas.shape[-1]))
-    for i, frame in enumerate(datas):
-        y = np.argmax(frame[x[i]])
-        track[0, x[i], y] = frame[x[i], y]
-
-    track[0] = data_normalization(track[0])
+    # d_range = datas.sum(axis=2)
+    # x = np.argmax(d_range, axis=1)
+    track = np.zeros((3, datas.shape[-2], datas.shape[-1]))
+    #for i, frame in enumerate(datas):
+    #    y = np.argmax(frame[x[i]])
+    #    track[0, x[i], y] = frame[x[i], y]
+    track[0] = np.max(datas,axis=0)
+    track[1] = np.mean(datas, axis=0)
+    track[2] = np.std(datas, axis=0)
+    #track[0] = data_normalization(track[0])
     return track
 
 
@@ -371,9 +373,7 @@ if __name__ == '__main__':
     permutation = np.random.permutation(test_datas.__len__())
     for it in tqdm(permutation):
         data, track, label, index = test_datas.__getitem__(it)
-        if len(data) < 50:
-            continue
-        visdom.heatmap(data[30], win=str(label.item()),
+        visdom.heatmap(track[0], win=str(label.item()),
                            opts=dict(title='label = ' + test_datas.file_names[index]))
 
         max_frame = max(max_frame, data.size()[0])

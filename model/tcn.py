@@ -40,11 +40,12 @@ class TemporalBlock(nn.Module):
 
 
 class TCN(nn.Module):
-    def __init__(self, input_size, output_size, num_channels, kernel_size, dropout):
+    def __init__(self, input_size, output_size, num_channels, dropout=0.2, kernel_size=3):
         super(TCN, self).__init__()
 
         layers = []
         num_levels = len(num_channels)
+        self.output_size = output_size
 
         for i in range(num_levels):
             dilation_size = 2 ** i
@@ -58,12 +59,16 @@ class TCN(nn.Module):
         self.network = nn.Sequential(*layers)
         self.fc = nn.Linear(num_channels[-1], output_size)
 
-    def forward(self, x):
+    def forward(self, x, data_lens):
         x = torch.transpose(x, 1, 2)
         out = self.network(x)
         out = torch.transpose(out, 1, 2)
-        # out = self.fc(out)
-        return out
+        out = self.fc(out)
+        final_state = torch.zeros((len(data_lens), 1, self.output_size), device=x.device)
+        ceil =  torch.zeros((len(data_lens), 1, self.output_size), device=x.device)
+        for i,v in enumerate(data_lens):
+            final_state[i] = out[i, v-1]
+        return out, (final_state, ceil)
 
 
 class SimpleTemporalBlock(nn.Module):

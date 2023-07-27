@@ -80,96 +80,117 @@ class InvertedResidual(nn.Module):
             return self.conv(x)
 
 class Conv2dBnRelu(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel_size=(3, 3), stride=1, group=1):
+    def __init__(self, in_channel, out_channel, kernel_size=(3, 3), stride=1, group=1, padding=1):
         super(Conv2dBnRelu, self).__init__()
         self.conv = nn.Conv2d(in_channel, out_channel,
-                               kernel_size=kernel_size, padding=1, stride=stride, bias=False, groups=group)
+                               kernel_size=kernel_size, padding=padding, stride=stride, bias=False, groups=group)
         self.bn = MaskedBatchNorm2d(out_channel)
 
     def forward(self, x, mask):
         x = self.conv(x)
+        x = F.leaky_relu(x)
         x = self.bn(x, mask=mask)
-        x = F.leaky_relu(x, inplace=True)
         return x
 
 class Conv1dBnRelu(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel_size=3, stride=1, group=1, padding=1):
+    def __init__(self, in_channel, out_channel, kernel_size=3, stride=1, group=1, padding=1, bn=True):
         super(Conv1dBnRelu, self).__init__()
         self.conv = nn.Conv1d(in_channel, out_channel,
                                kernel_size=kernel_size, padding=padding, stride=stride, bias=False, groups=group)
-        self.bn = MaskedBatchNorm1d(out_channel)
+        self.need_bn = bn
+        if bn:
+            self.bn = MaskedBatchNorm1d(out_channel)
+
 
     def forward(self, x, mask):
         x = self.conv(x)
-        x = self.bn(x, mask=mask)
-        x = F.leaky_relu(x, inplace=True)
+        x = F.hardswish(x, inplace=False)
+        if self.need_bn:
+            x = self.bn(x, mask=mask)
         return x
 
-class SingleDimConvV2(nn.Module):
-    def __init__(self, in_channel, dim, channel_num):
-        super(SingleDimConvV2, self).__init__()
-        conv_kernel = [3, 3]
-        conv_kernel[dim] = 1
-        conv_kernel = tuple(conv_kernel)
-        pooling_kernel = [2, 2]
-        pooling_kernel[dim] = 1
-        pooling_kernel = tuple(pooling_kernel)
-        self.conv1 = Conv2dBnRelu(in_channel, channel_num[0], kernel_size=conv_kernel)
-        # self.dw1 = Conv2dBnRelu(channel_num[0], channel_num[0], kernel_size=(3, 1), stride=2, group=channel_num[0])
-        self.conv2 = Conv2dBnRelu(channel_num[0], channel_num[1], kernel_size=conv_kernel)
-        # self.dw2 = Conv1dBnRelu(channel_num[1], channel_num[1], stride=2, group=channel_num[1])
-        self.conv3 = Conv2dBnRelu(channel_num[1], channel_num[2], kernel_size=conv_kernel)
-        # self.dw3 = Conv1dBnRelu(channel_num[2], channel_num[2], stride=2, group=channel_num[2])
-        if in_channel != channel_num[2]:
-            self.down_sample = Conv1dBnRelu(in_channel, channel_num[2], kernel_size=1, padding=0)
-
-        self.mp = nn.MaxPool2d(kernel_size=pooling_kernel, ceil_mode=True)
-        self.ap = nn.AvgPool2d(kernel_size=pooling_kernel, ceil_mode=True)
-
+class Rebu(nn.Module):
+    def __init__(self, in_channel, out_channel, stride=1):
+        super(Rebu, self).__init__()
+        self.conv1 = None
+        if in_channel != out_channel:
+            self.conv1 = Conv1dBnRelu(in_channel, out_channel)
+        self.conv2 = Conv1dBnRelu(out_channel, out_channel, stride=stride)
+        self.cutshort = None
+        if in_channel != out_channel and stride ==1:
+            self.cutshort = Conv1dBnRelu(in_channel, out_channel, kernel_size=1, padding=0)
     def forward(self, x, mask):
         res = x
-        x = self.conv1(x, mask)
-        # x = self.dw1(x, mask)
-        x = self.mp(x)
+        if self.conv1 is not None:
+            x = self.conv1(x, mask)
         x = self.conv2(x, mask)
-        x = self.ap(x)
-        x = self.conv3(x, mask)
-        x = self.ap(x)
+        if self.cutshort is not None:
+            x = x +self.cutshort(res, mask)
+        return x
+
+
+class SingleDimConvV2(nn.Module):
+    def __init__(self, in_channel, channel_num):
+        super(SingleDimConvV2, self).__init__()
+        self.conv1 = Conv1dBnRelu(in_channel, channel_num[0], stride=2)
+        self.dw1 = Rebu(channel_num[0], channel_num[1], stride=2)
+        self.dw2 = Rebu(channel_num[1], channel_num[2], stride=2)
+        self.dw3 = Rebu(channel_num[1], channel_num[1], stride=1)
+        self.dw4 = Rebu(channel_num[1], channel_num[2], stride=1)
+        self.dw5 = Rebu(channel_num[2], channel_num[2], stride=2)
+
+    def forward(self, x, mask):
+        x = self.conv1(x, mask)
+        x = self.dw1(x, mask)
+        x = self.dw2(x, mask)
+
         return x
 
 
 
 class SingleDimConv(nn.Module):
-    def __init__(self, in_channel, channel_num):
+    def __init__(self, in_channel, channel_num, input_size=32, dropout=0.):
         super(SingleDimConv, self).__init__()
-        self.conv1 = Conv1dBnRelu(in_channel, channel_num[0])
+        self.expand = Conv1dBnRelu(in_channel, channel_num[0], kernel_size=1, padding=0)
+        self.conv1 = Conv1dBnRelu(channel_num[0], channel_num[0], bn=False)
+        # self.ln1 = nn.LayerNorm(input_size)
         # self.dw1 = Conv1dBnRelu(channel_num[0], channel_num[0], stride=2, group=channel_num[0])
-        self.conv2 = Conv1dBnRelu(channel_num[0], channel_num[1])
+        self.conv2 = Conv1dBnRelu(channel_num[0], channel_num[1], bn=False)
+        # self.ln2 = nn.LayerNorm(input_size)
         # self.dw2 = Conv1dBnRelu(channel_num[1], channel_num[1], stride=2, group=channel_num[1])
-        self.conv3 = Conv1dBnRelu(channel_num[1], channel_num[2])
+        self.conv3 = Conv1dBnRelu(channel_num[1], channel_num[2], bn=False)
+        # self.ln3 = nn.LayerNorm(input_size)
+        # self.ln4 = nn.LayerNorm(input_size)
         # self.dw3 = Conv1dBnRelu(channel_num[2], channel_num[2], stride=2, group=channel_num[2])
+        self.down_sample=None
         if in_channel != channel_num[2]:
-            self.down_sample = Conv1dBnRelu(in_channel, channel_num[2], kernel_size=1, padding=0)
-
-        self.mp = nn.MaxPool1d(kernel_size=2, ceil_mode=True)
-        self.ap = nn.AvgPool1d(kernel_size=2, ceil_mode=True)
+            self.down_sample = Conv1dBnRelu(in_channel, channel_num[2], kernel_size=1, padding=0, bn=False)
+        self.bn = MaskedBatchNorm1d(channel_num[2])
+        # self.mp = nn.MaxPool1d(kernel_size=2, ceil_mode=True)
+        # self.ap = nn.AvgPool1d(kernel_size=2, ceil_mode=True)
+        self.dropout1 = nn.Dropout(dropout)
 
     def forward(self, x, mask):
+        # x = self.ln1(x)
         res = x
+        x = self.expand(x, mask)
         x = self.conv1(x, mask)
+        # x = self.ln2(x)
+        x = self.dropout1(x)
         # x = self.dw1(x, mask)
         # x = self.mp(x)
         x = self.conv2(x, mask)
+        # x = self.ln3(x)
         # x = self.ap(x)
         x = self.conv3(x, mask)
         # x = self.ap(x)
         if self.down_sample is not None:
             res = self.down_sample(res, mask)
-        x = res + x
-        return x
+        # x = self.bn(res + x, mask=mask)
+        return x + res
 
 class CNN2d3LayersV2(nn.Module):
-    def __init__(self, in_channel, channel_num):
+    def __init__(self, in_channel, channel_num, dropout=0.4):
         super(CNN2d3LayersV2, self).__init__()
         self.conv1 = Conv2dBnRelu(in_channel, channel_num[0])
         # self.dw1 = Conv2dBnRelu(channel_num[0], channel_num[0], stride=2, group=channel_num[0])
@@ -177,6 +198,8 @@ class CNN2d3LayersV2(nn.Module):
         # self.dw2 = Conv2dBnRelu(channel_num[1], channel_num[1], stride=2, group=channel_num[1])
         self.conv3 = Conv2dBnRelu(channel_num[1], channel_num[2])
         # self.dw3 = Conv2dBnRelu(channel_num[2], channel_num[2], stride=2, group=channel_num[2])
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
 
         self.mp = nn.MaxPool2d(kernel_size=2, ceil_mode=True)
         self.ap = nn.AvgPool2d(kernel_size=2, ceil_mode=True)
@@ -186,6 +209,7 @@ class CNN2d3LayersV2(nn.Module):
         # x = self.dw1(x, mask)
         x = self.mp(x)
         x = self.conv2(x, mask)
+        x = self.dropout1(x)
         x = self.ap(x)
         x = self.conv3(x, mask)
         x = self.ap(x)
