@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 import torchmetrics
 
 from data.di_gesture_dataset import *
@@ -90,9 +91,9 @@ def collate_fn(datas_and_labels):
 
 def train(train_set, test_set, start_epoch=0, net=None):
     if net is None:
-        net = RAIRadarGestureClassifier(cfar=True, track=True, spatial_channels=(4, 8, 16), ra_conv=True, heads=4,
+        net = RAIRadarGestureClassifier_2(cfar=True, track=True, spatial_channels=(4, 8, 16), ra_conv=True, heads=4,
                                               track_channels=(6, 8, 16), track_out_size=32, hidden_size=(128, 128),
-                                              ra_feat_size=32, attention=True, cfar_expand_channels=4)
+                                              ra_feat_size=32, attention=True, cfar_expand_channels=16)
         # net.load_state_dict(torch.load('test_cross_environment_3.pth')['model_state_dict'])
 
     net = net.to(device)
@@ -133,8 +134,8 @@ def train(train_set, test_set, start_epoch=0, net=None):
     lr_list[150:] = 0.0001
     lr_cfar = np.zeros(total_epoch)
     lr_cfar[:100] = 0.0001
-    lr_cfar[100:150] = 0.00001
-    lr_cfar[150:] = 0.000001
+    lr_cfar[100:150] = 0.00003
+    lr_cfar[150:] = 0.00001
 
     pre_lr = 0
     for epoch in range(start_epoch, total_epoch):

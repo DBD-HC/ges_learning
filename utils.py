@@ -121,32 +121,32 @@ def simple_shift_list(datas, d_distance, d_angle):
     for i in range(len(d_distance)):
         if d_distance[i] > 0:
             datas[i, d_distance[i]:, :] = datas[i, :-d_distance[i], :]
-            datas[i, :d_distance[i], :] = datas.min()
+            datas[i, :d_distance[i], :] = datas[i].min()
         elif d_distance[i] < 0:
             datas[i, :d_distance[i], :] = datas[i, -d_distance[i]:, :]
-            datas[i, d_distance[i]:, :] = datas.min()
+            datas[i, d_distance[i]:, :] = datas[i].min()
         if d_angle[i] > 0:
             datas[i, :, d_angle[i]:] = datas[i, :, :-d_angle[i]]
-            datas[i, :, :d_angle[i]] = datas.min()
+            datas[i, :, :d_angle[i]] = datas[i].min()
         elif d_angle[i] < 0:
             datas[i, :, :d_angle[i]] = datas[i, :, -d_angle[i]:]
-            datas[i, :, d_angle[i]:] = datas.min()
+            datas[i, :, d_angle[i]:] = datas[i].min()
     return datas
 
 
 def simple_shift(datas, d_distance, d_angle):
     if d_distance > 0:
         datas[:, d_distance:, :] = datas[:, :-d_distance, :]
-        datas[:, :d_distance, :] = datas.min()
+        datas[:, :d_distance, :] = datas.min(axis=(1, 2))[:, None, None]
     elif d_distance < 0:
         datas[:, :d_distance, :] = datas[:, -d_distance:, :]
-        datas[:, d_distance:, :] = datas.min()
+        datas[:, d_distance:, :] = datas.min(axis=(1, 2))[:, None, None]
     if d_angle > 0:
         datas[:, :, d_angle:] = datas[:, :, :-d_angle]
-        datas[:, :, :d_angle] = datas.min()
+        datas[:, :, :d_angle] = datas.min(axis=(1, 2))[:, None, None]
     elif d_angle < 0:
         datas[:, :, :d_angle] = datas[:, :, -d_angle:]
-        datas[:, :, d_angle:] = datas.min()
+        datas[:, :, d_angle:] = datas.min(axis=(1, 2))[:, None, None]
 
     return datas
 
@@ -158,3 +158,44 @@ def get_after_conv_size(size, kernel_size, layer, dilation=1, padding=0, stride=
         return size
     else:
         return get_after_conv_size(size, kernel_size, layer - 1, dilation, padding, stride, reduction)
+
+
+import numpy as np
+
+
+def get_cfar_2d_threshold_factor(guard_size=2, train_size=4, pfa=0.1):
+    N = ((guard_size + train_size + 1) * 2) ** 2 - ((guard_size + 1) * 2) ** 2
+
+    return N * (np.power(pfa, -1 / N) - 1)
+
+
+threshold_factor = get_cfar_2d_threshold_factor()
+
+
+def ca_cfar_2d(data, guard_size=2, train_size=4, thr_factor=2.5):
+    num_rows, num_cols = data.shape
+    detections = np.zeros((num_rows, num_cols))
+
+    for i in range(guard_size, num_rows - guard_size):
+        for j in range(guard_size, num_cols - guard_size):
+            train_cells = []
+            guard_cells = []
+
+            # Collect cells for training region
+            for row_offset in range(-train_size, train_size + 1):
+                for col_offset in range(-train_size, train_size + 1):
+                    if abs(row_offset) <= guard_size and abs(col_offset) <= guard_size:
+                        guard_cells.append(data[i + row_offset, j + col_offset])
+                    else:
+                        train_cells.append(data[i + row_offset, j + col_offset])
+
+            # Calculate threshold
+            threshold = np.mean(train_cells) * threshold_factor
+
+            # Check if signal cell is greater than threshold
+            if data[i, j] > threshold:
+                detections[i, j] = 1
+
+    detections = detections == 0
+    data[detections] = min(data)
+    return data

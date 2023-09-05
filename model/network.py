@@ -11,6 +11,8 @@ from model.mobile_net import *
 from model.tcn import TCN
 from model.lstm import LSTM_2
 import visdom
+import torch.nn.init as init
+from model.stn import RAISTN
 
 
 class CFAR(nn.Module):
@@ -23,43 +25,48 @@ class CFAR(nn.Module):
 
             # conv_weight = torch.from_numpy(init_weight(window_size, 6)).unsqueeze(0).unsqueeze(0)
             # self.expand = nn.Conv2d(in_channel, channel_nums[0], kernel_size=1)
-            self.conv1 = nn.Conv2d(in_channel, expand_channel, padding=2, padding_mode='circular',
-                                   kernel_size=5)
-            self.conv2 = nn.Conv2d(expand_channel, expand_channel, padding=1, padding_mode='circular',
-                                   kernel_size=3)
-            self.conv3 = nn.Conv2d(expand_channel, in_channel, padding=1, padding_mode='circular',
-                                   kernel_size=3)
+            self.conv1 = nn.Conv2d(in_channel, expand_channel, padding=2, padding_mode='reflect',
+                                   kernel_size=3, dilation=2, bias=False)
+            self.conv2 = nn.Conv2d(expand_channel, expand_channel, padding=2, padding_mode='reflect',
+                                   kernel_size=5, groups=expand_channel, bias=False)
+            self.conv3 = nn.Conv2d(expand_channel, in_channel, padding=2, padding_mode='reflect',
+                                   kernel_size=3, dilation=2, bias=False)
+            # init.uniform_(self.conv1.weight, 0.02, 0.06)
+            # init.uniform_(self.conv2.weight, 0.08, 0.13)
+            # init.uniform_(self.conv3.weight, 0.08, 0.13)
+
             # self.conv1.weight = torch.nn.Parameter(conv_weight.float())
             self.visdom = visdom.Visdom(env='CFAR', port=6006)
-            # self.bn0 = MaskedBatchNorm2d(in_channel)
-            self.bn1 = MaskedBatchNorm2d(expand_channel)
-            self.bn2 = MaskedBatchNorm2d(expand_channel)
             self.bn3 = MaskedBatchNorm2d(in_channel)
             self.ln = nn.LayerNorm(input_size)
 
-            self.relu0 = torch.nn.LeakyReLU()
-            self.sigmoid = torch.nn.Sigmoid()
+            self.relu0 = torch.nn.Hardswish()
+            self.sigmoid = torch.nn.Tanh()
+            # self.bias = nn.Parameter(torch.mul(torch.ones(size=input_size), 100), requires_grad=True)
 
     def forward(self, x, mask=None, **kwargs):
         # x = self.bn0(x, mask=mask)
         thr = self.conv1(x)
         # thr = self.relu0(thr)
         # thr = self.bn1(thr, mask=mask)
+        thr = self.relu0(thr)
         # thr = self.av_pool(thr)
         thr = self.conv2(thr)
-        # thr = self.relu0(thr)
         # thr = self.bn2(thr, mask=mask)
+        thr = self.relu0(thr)
         # thr = self.av_pool(thr)
         thr = self.conv3(thr)
         # thr = self.relu0(thr)
-
-        # thr = self.av_pool(thr)
         weight = x - thr
-        weight = self.ln(weight)
-        weight = self.sigmoid(weight)
-        res = x * weight
+        # thr = self.av_pool(thr)
+        res = F.relu(weight)*F.sigmoid(self.ln(weight))
+        # res = x * weight
+        # weight = self.ln(weight)
+        # weight = self.sigmoid(weight)
+        # res = x * weight
+
+        # res = F.hardswish(res)
         res = self.bn3(res, mask=mask)
-        res = F.relu(res)
         # res = self.bn1(res, mask=mask)
         if not self.training and 'indexes' in kwargs:
             indexes = kwargs['indexes']
@@ -67,7 +74,7 @@ class CFAR(nn.Module):
             if 777 in indexes:
                 index = indexes.index(777)
                 x_t = x.view(len(indexes), -1, 32, 32)
-                th_t = weight.view(len(indexes), -1, 32, 32)
+                th_t = thr.view(len(indexes), -1, 32, 32)
                 res_t = res.view(len(indexes), -1, 32, 32)
 
                 self.visdom.heatmap(x_t[index][10], win=ids + '_origin',
@@ -146,13 +153,16 @@ def get_cnn_1d_block(in_channel=4, channel_num=(16, 16, 4)):
 
 
 class SpatialAttBlock(nn.Module):
-    def __init__(self, in_channel=2, channel_num=(16, 8, 4), input_size=32, out_size=32, dim=-1, dropout=0.5, eps=1e-5):
+    def __init__(self, in_channel=2, channel_num=(8, 16, 32), input_size=32, out_size=32, dim=-1, dropout=0.5, eps=1e-5):
         super(SpatialAttBlock, self).__init__()
         self.single_dim_conv = SingleDimConv(in_channel * 3, channel_num)
         linear_in = get_after_conv_size(size=input_size, kernel_size=3, layer=3, padding=1,
-                                        reduction=1) * channel_num[-1]
+                                        reduction=2) * channel_num[-1]
         self.dim = dim
         self.fc1 = nn.Linear(linear_in, out_size, bias=False)
+        #self.fc2 = nn.Linear(out_size, out_size, bias=False)
+
+        self.bn1 = MaskedBatchNorm1d(in_channel * 3)
         self.bn3 = MaskedBatchNorm1d(out_size)
         self.dp = nn.Dropout(dropout)
 
@@ -162,43 +172,106 @@ class SpatialAttBlock(nn.Module):
         avg_x = torch.mean(x, dim=self.dim)
         std_x = torch.std(x, dim=self.dim)
         avg_max = torch.cat((max_x, avg_x, std_x), dim=1)
-
+        avg_max = self.bn1(avg_max, mask=mask)
         score = self.single_dim_conv(avg_max, mask)
-        # avg_max = self.bn1(avg_max, mask=mask)
-        # score = self.range_conv(avg_max)
-        # score = self.ln(score, batch_size, padding_len)
-        # score = score + self.down_sample(avg_max)
-        # score = self.bn1(score, mask=mask)
-        #         if not self.training and 'indexes' in kwargs:
-        #             indexes = kwargs['indexes']
-        #             ids = str(kwargs['epoch'] % 10)
-        #             if self.dim == -1:
-        #                 ids = ids + '_range'
-        #             else:
-        #                 ids = ids + '_angel'
-        #             if 367 in indexes:
-        #                 index = indexes.index(333)
-        #                 x_t = x.view(len(indexes), -1, 32, 32)
-        #                 # att_x_t = att_x.view(len(indexes), -1, 32, 32)
-        #                 score_t = score.view(len(indexes), -1, 4, 32)
-        #                 self.visdom.heatmap(x_t[index][10], win=ids + '_origin',
-        #                                     opts=dict(title=ids + 'origin' + str(kwargs['epoch'])))
-        #                 self.visdom.heatmap(score_t[index][10], win=ids + '_att_score',
-        #                                     opts=dict(title=ids + 'att score' + str(kwargs['epoch'])))
-        # score = self.ln(score, batch_size, padding_len)
-        # score = score.view(len(x), -1)
-        # score = self.bn1(score, mask=mask)
         score = score.view(len(x), -1)
-        # score = F.relu(score)
-        # score = self.dp(score)
         score = self.dp(score)
         score = self.fc1(score)
+
         score = self.bn3(score, mask=mask)
-        # score = self.ln2(score)
-        # score = F.hardswish(score)
         score = score.view(batch_size, padding_len, -1)
-        # score = F.leaky_relu(score)
         return score
+
+class SpatialAttBlock2(nn.Module):
+    def __init__(self, in_channel=2, channel_num=(8, 16, 32), input_size=32, out_size=32, dim=-1, dropout=0.5, eps=1e-5):
+        super(SpatialAttBlock2, self).__init__()
+        self.single_dim_conv = SingleDimConv2(in_channel * 3, channel_num)
+        linear_in = get_after_conv_size(size=input_size, kernel_size=3, layer=3, padding=1,
+                                        reduction=1) * channel_num[-1]
+        self.dim = dim
+        self.fc1 = nn.Linear(174, out_size, bias=False)
+        #self.fc2 = nn.Linear(out_size, out_size, bias=False)
+
+        self.bn1 = MaskedBatchNorm1d(in_channel * 3)
+        self.bn3 = MaskedBatchNorm1d(out_size)
+        self.dp = nn.Dropout(dropout)
+
+    def forward(self, x, batch_size, padding_len, mask=None, **kwargs):
+        # feat_len = x.size(self.dim)
+        x = torch.squeeze(x)
+        max_x = torch.max(x, dim=self.dim)[0]
+        avg_x = torch.mean(x, dim=self.dim)
+        std_x = torch.std(x, dim=self.dim)
+        avg_max = torch.cat((max_x, avg_x, std_x), dim=-1)
+        if self.dim == -1:
+            x = torch.transpose(x , -2, -1)
+
+        # avg_max = self.bn1(avg_max, mask=mask)
+
+        score = self.single_dim_conv(x, mask)
+        score = score.view(len(x), -1)
+        score = torch.cat((score, avg_max), dim=-1)
+        score = self.dp(score)
+        score = self.fc1(score)
+
+        score = self.bn3(score, mask=mask)
+        score = score.view(batch_size, padding_len, -1)
+        return score
+
+class SpatialModel2(nn.Module):
+    def __init__(self, num_channels, ra_conv=True, in_size=(32, 32), ra_feat_size=32, out_size=128, in_channels=1,
+                 dropout=0.5):
+        super(SpatialModel2, self).__init__()
+        self.need_ra_conv = ra_conv
+        if self.need_ra_conv:
+            self.spatial_conv = Conv2dBnRelu(in_channel=1, out_channel=num_channels[-1])
+            conv_h = get_after_conv_size(size=in_size[0], kernel_size=3, layer=1, padding=1, reduction=1)
+            conv_w = get_after_conv_size(size=in_size[1], kernel_size=3, layer=1, padding=1, reduction=1)
+        else:
+            self.spatial_conv = CNN2d3Layers2(in_channels, num_channels)
+            conv_h = get_after_conv_size(size=in_size[0], kernel_size=3, layer=1, padding=1, reduction=1)
+            conv_w = get_after_conv_size(size=in_size[1], kernel_size=3, layer=1, padding=1, reduction=1)
+        self.dp = nn.Dropout(dropout)
+        self.in_channels = in_channels
+
+        # 是否需要角度距离注意力
+        linear_input = num_channels[-1] * conv_h * conv_w
+        if ra_conv:
+            self.range_att = SpatialAttBlock2(dim=-1, in_channel=num_channels[-1], input_size=conv_h,
+                                             out_size=ra_feat_size)
+            self.angel_att = SpatialAttBlock2(dim=-2, in_channel=num_channels[-1], input_size=conv_w,
+                                             out_size=ra_feat_size)
+            # self.fc_1 = nn.Linear(2 * ra_feat_size, 2 * ra_feat_size, bias=False)
+            # self.bn4 = MaskedBatchNorm1d(2 * ra_feat_size)
+            # self.dp_2 = nn.Dropout(dropout)
+        else:
+            self.fc_1 = nn.Linear(linear_input, out_size, bias=False)
+            self.bn4 = MaskedBatchNorm1d(out_size)
+
+    def forward(self, x, data_length, mask=None, **kwargs):
+        batch_size = len(data_length)
+        padded_len = x.size(0)//batch_size
+        h = x.size(-2)
+        w = x.size(-1)
+
+        x = x.view(-1, self.in_channels, h, w)
+        x = self.spatial_conv(x, mask)
+        if self.need_ra_conv:
+            range_score = self.range_att(x, batch_size=batch_size, padding_len=padded_len, mask=mask, **kwargs)
+            angel_score = self.angel_att(x, batch_size=batch_size, padding_len=padded_len, mask=mask, **kwargs)
+            return torch.cat((range_score, angel_score), dim=-1)
+
+
+        # 提取RA二维频谱图特征
+        x = self.spatial_conv(x, mask)
+        x = x.view(x.size(0), -1)
+        x = self.dp(x)
+        x = self.fc_1(x)
+        x = self.bn4(x, mask=mask)
+
+        x = x.view(len(data_length), padded_len, -1)
+        x = F.hardswish(x)
+        return x
 
 
 class SpatialModel(nn.Module):
@@ -237,49 +310,60 @@ class SpatialModel(nn.Module):
             range_score = self.range_att(x, batch_size=batch_size, padding_len=padded_len, mask=mask, **kwargs)
             angel_score = self.angel_att(x, batch_size=batch_size, padding_len=padded_len, mask=mask, **kwargs)
 
+
         # 提取RA二维频谱图特征
         x = self.spatial_conv(x, mask)
         x = x.view(x.size(0), -1)
         x = self.dp(x)
         x = self.fc_1(x)
         x = self.bn4(x, mask=mask)
+
         x = x.view(len(data_length), padded_len, -1)
         if self.need_ra_conv:
             x = torch.cat((x, range_score, angel_score), dim=-1)
         x = F.hardswish(x)
         return x
 
-
-class LstmAttention(nn.Module):
-    def __init__(self, input_size, hidden_size, out_size, attention=True, heads=4, dropout=0.5):
-        super(LstmAttention, self).__init__()
-        self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size, num_layers=1, batch_first=True)
+class TemporalModel2(nn.Module):
+    def __init__(self, input_size, out_size, attention=True, ra_conv=True, ra_feat_size=None, heads=4, dropout=0.5):
+        super(TemporalModel2, self).__init__()
+        self.lstm_1 = nn.LSTM(input_size=64, hidden_size=64, num_layers=1, batch_first=True)
+        self.need_attention = attention
         if attention:
-            self.need_attention = attention
-            self.new_att = TemporalAttention(hidden_size)
-
             # self.multi_head_attention = MultiHeadAttention(query_size=hidden_size, key_size=hidden_size,
             #                                                value_size=hidden_size, num_hidden=out_size,
-            #                                                num_heads=heads, dropout=nn.Dropout(p=dropout))
-        self.dropout_1 = nn.Dropout(p=dropout)
-        self.dropout_2 = nn.Dropout(p=dropout)
+            #                                                num_heads=heads, dropout=nn.Dropout(p=0.1))
+            self.multi_head_attention = ResidualMultiHeadAttention(query_size=64, key_size=64,
+                                                           value_size=64, num_hidden=64,
+                                                           num_heads=heads, dropout=0.4)
+        self.bn0 = MaskedBatchNorm1d(64)
+        self.bn = nn.BatchNorm1d(64)
+        self.dropout_2 = nn.Dropout(p=0.5)
 
-    def forward(self, x, data_lens, **kwargs):
-        x = self.dropout_1(x)
+    def forward(self,x=None, data_lens=None, mask=None, **kwargs):
+        # x = self.bn0(x, mask=mask)
         x = pack_padded_sequence(x, data_lens.cpu(), batch_first=True)
-        output, (h_n, _) = self.lstm(x)
+        output, (h_n, _) = self.lstm_1(x)
         output, out_len = pad_packed_sequence(output, batch_first=True)
         final_state = h_n[-1]
         final_state = final_state[:, None, :]
         if self.need_attention:
-            # x = self.multi_head_attention(final_state, output, output, data_lens)
-            x = self.new_att(x, )
-            x = final_state + self.dropout_1(x)
+            # q_x = torch.sum(output, dim=1)[:, :]
+            # q_x = q_x/data_lens[:, None]
+            # q_x = q_x[:, None, :]
+            # x = self.multi_head_attention(q_x, output, output, data_lens)
+            # x = final_state + self.dropout_2(x)
+            x = self.multi_head_attention(final_state, output, output, data_lens)
+            # x = final_state + self.dropout_2(x)
         else:
             x = final_state
-        x = torch.squeeze(x)
-        return x
 
+        x = torch.squeeze(x)
+        x = F.hardswish(x)
+        x = self.bn(x)
+        # x = self.dropout_2(x)
+
+        return x
 
 class TemporalModel(nn.Module):
     def __init__(self, input_size, out_size, attention=True, ra_conv=True, ra_feat_size=None, heads=4, dropout=0.5):
@@ -297,14 +381,14 @@ class TemporalModel(nn.Module):
             #                                                num_heads=heads, dropout=nn.Dropout(p=0.1))
             self.multi_head_attention = ResidualMultiHeadAttention(query_size=hidden_size, key_size=hidden_size,
                                                            value_size=hidden_size, num_hidden=out_size,
-                                                           num_heads=heads, dropout=0.1)
+                                                           num_heads=heads, dropout=0.4)
         if hidden_size != out_size:
             self.fc = nn.Linear(hidden_size, out_size)
         else:
             self.fc = None
         self.bn = nn.BatchNorm1d(out_size)
         self.bn_mid = nn.BatchNorm1d(hidden_size)
-        self.dropout_2 = nn.Dropout(p=dropout)
+        self.dropout_2 = nn.Dropout(p=0.5)
 
     def forward(self, x, ra=None, data_lens=None, mask=None, **kwargs):
         x = pack_padded_sequence(x, data_lens.cpu(), batch_first=True)
@@ -328,18 +412,20 @@ class TemporalModel(nn.Module):
             # x = self.multi_head_attention(q_x, output, output, data_lens)
             # x = final_state + self.dropout_2(x)
             x = self.multi_head_attention(final_state, output, output, data_lens)
+            # x = final_state + self.dropout_2(x)
         else:
             x = final_state
 
         x = torch.squeeze(x)
         x = F.hardswish(x)
         x = self.bn(x)
+        # x = self.dropout_2(x)
 
         return x
 
 
 class TRACK_NET(nn.Module):
-    def __init__(self, num_channels, in_channels=2, in_size=(32, 32), out_size=64, dropout=0.5):
+    def __init__(self, num_channels, in_channels=3, in_size=(32, 32), out_size=64, dropout=0.5):
         super(TRACK_NET, self).__init__()
         self.track_conv = nn.Sequential(
             nn.Conv2d(in_channels, num_channels[0], kernel_size=(3, 3), bias=False),
@@ -365,17 +451,93 @@ class TRACK_NET(nn.Module):
         self.bn0 = nn.BatchNorm2d(in_channels)
         self.bn4 = nn.BatchNorm1d(out_size)
 
-    def forward(self, x, mask, **kwargs):
+    def forward(self, x, data_length, **kwargs):
+        t_sum = torch.sum(x, dim=1)[:, None, :]
+        t_mean = t_sum / (data_length[:, None, None, None])
+        #t_std = torch.sum((x - t_mean) ** 2, dim=1) / (data_length[:, None, None, ])
+        #t_std = torch.sqrt(t_std)[:, None, :]
+        t_std= (torch.sum(x*x, dim=1)[:, None, :]/(data_length[:, None, None, None]) - t_mean*t_mean)
+        t_std = torch.sqrt(F.relu(t_std))
+        # mask = mask
+        # x[not mask] = x.min()
+        x_min = torch.min(x)
+        x = pack_padded_sequence(x, data_length.cpu(), batch_first=True)
+        x, _ = pad_packed_sequence(x, padding_value=x_min.item(), batch_first=True)
+        t_max = torch.max(x, dim=1)[0][:, None, :]
+        x = torch.cat((t_mean, t_max, t_std), dim=1)
         # x = self.bn0(x)
         x = self.track_conv(x)
         x = x.view(x.size(0), -1)
-        x = self.dp(x)
+        # x = self.dp(x)
         x = self.fc_1(x)
         x = F.hardswish(x)
         x = self.bn4(x)
+        # x = self.dp(x)
 
         return x
 
+class RAIRadarGestureClassifier_2(nn.Module):
+    def __init__(self, cfar=True, track=True, ra_conv=True, attention=True, heads=4, in_size=(32, 32), hidden_size=(128, 64),
+                 out_size=7, cfar_expand_channels=8, cfar_in_channel=1, dropout=0.5,
+                 track_channels=(4, 8, 16), ra_feat_size=32, track_out_size=64, spatial_channels=(8, 16, 32)):
+        super(RAIRadarGestureClassifier_2, self).__init__()
+        self.sn = SpatialModel(ra_conv=ra_conv, in_size=in_size, num_channels=spatial_channels,
+                               out_size=hidden_size[0], ra_feat_size=ra_feat_size, in_channels=1)
+        self.need_track = track
+        self.need_ra_conv = ra_conv
+        self.hidden_size = hidden_size
+        self.need_cfar = cfar
+        self.bn0 = MaskedBatchNorm2d(1)
+        self.stn = RAISTN(feat_size=in_size)
+        if self.need_cfar:
+            self.CFAR = CFAR(3, in_channel=cfar_in_channel, expand_channel=cfar_expand_channels)
+        if track:
+            self.tn = TRACK_NET(num_channels=track_channels, in_size=in_size, out_size=track_out_size)
+            self.fc_2 = nn.Linear(track_out_size + 64, out_size)
+
+        else:
+            self.fc_2 = nn.Linear(64, out_size)
+        if ra_conv:
+            self.ra_feat_size = ra_feat_size
+            self.temporal_net = TemporalModel2(hidden_size[0] - 2 * ra_feat_size, hidden_size[1], attention=attention,
+                                              ra_conv=ra_conv, heads=heads,
+                                              ra_feat_size=ra_feat_size)
+        else:
+            self.temporal_net = TemporalModel2(hidden_size[0], hidden_size[1], attention=attention, ra_conv=ra_conv)
+        self.dropout_1 = nn.Dropout(p=dropout)
+
+    def forward(self, x, track, data_length, **kwargs):
+        bach_size = x.size(0)
+        padded_lens = x.size(1)
+        h = x.size(-2)
+        w = x.size(-1)
+        mask = torch.arange(x.size(1), dtype=torch.float32, device=x.device)
+        mask = mask[None, :] < data_length[:, None]
+        mask = mask.reshape(-1)
+        x = self.stn(x, data_length, **kwargs)
+        x = x.view(-1, 1, h, w)
+        if self.need_cfar:
+            x = self.CFAR(x, mask, **kwargs)
+
+
+        if self.need_track:
+            t = self.tn(x.view(bach_size, padded_lens, h, w), data_length, **kwargs)
+            t = t.view(bach_size, -1)
+
+        # x = x.view(bach_size * padded_lens, -1, h, w)
+        x = self.sn(x, data_length, mask, **kwargs)
+        feat_size = self.hidden_size[0] - 2 * self.ra_feat_size
+        ra = x[:, :, feat_size:]
+        x = x[:, :, :feat_size]
+        #x = self.dropout_1(ra)
+        x = ra
+        x = self.temporal_net(x, data_length, mask, **kwargs)
+
+        if self.need_track:
+            x = torch.cat((x, t), dim=-1)
+        x = self.fc_2(x)
+
+        return x
 
 class RAIRadarGestureClassifier(nn.Module):
     def __init__(self, cfar=True, track=True, ra_conv=True, attention=True, heads=4, in_size=(32, 32), hidden_size=(128, 64),
@@ -388,10 +550,11 @@ class RAIRadarGestureClassifier(nn.Module):
         self.need_ra_conv = ra_conv
         self.hidden_size = hidden_size
         self.need_cfar = cfar
+        self.bn0 = MaskedBatchNorm2d(1)
         if self.need_cfar:
             self.CFAR = CFAR(3, in_channel=cfar_in_channel, expand_channel=cfar_expand_channels)
         if track:
-            self.tn = TRACK_NET(num_channels=track_channels, in_size=in_size, out_size=track_out_size, in_channels=3)
+            self.tn = TRACK_NET(num_channels=track_channels, in_size=in_size, out_size=track_out_size)
             self.fc_2 = nn.Linear(track_out_size + hidden_size[1], out_size)
 
         else:
@@ -412,24 +575,24 @@ class RAIRadarGestureClassifier(nn.Module):
         w = x.size(-1)
         mask = torch.arange(x.size(1), dtype=torch.float32, device=x.device)
         mask = mask[None, :] < data_length[:, None]
-        mask_flatten = mask.reshape(-1)
-
+        mask = mask.reshape(-1)
         x = x.view(-1, 1, h, w)
         if self.need_cfar:
-            x = self.CFAR(x, mask_flatten, **kwargs)
-            # x = detect.view(-1, 1, h, w)
+            x = self.CFAR(x, mask, **kwargs)
         if self.need_track:
-            t = self.tn(track, mask, **kwargs)
+            t = self.tn(x.view(bach_size, padded_lens, h, w), data_length, **kwargs)
             t = t.view(bach_size, -1)
-        x = x.view(bach_size * padded_lens, -1, h, w)
-        x = self.sn(x, data_length, mask_flatten, **kwargs)
+
+        # x = x.view(bach_size * padded_lens, -1, h, w)
+        # x = self.bn0(x, mask=mask)
+        x = self.sn(x, data_length, mask, **kwargs)
         x = self.dropout_1(x)
         ra = None
         if self.need_ra_conv:
             feat_size = self.hidden_size[0] - 2 * self.ra_feat_size
             ra = x[:, :, feat_size:]
             x = x[:, :, :feat_size]
-        x = self.temporal_net(x, ra, data_length, mask_flatten, **kwargs)
+        x = self.temporal_net(x, ra, data_length, mask, **kwargs)
 
         if self.need_track:
             x = torch.cat((x, t), dim=-1)

@@ -196,6 +196,11 @@ def random_reverse(datas, labels, p=0.5):
     return datas, labels
 
 
+def cfar(datas):
+    for i, frame in enumerate(datas):
+        datas[i] = ca_cfar_2d(frame, thr_factor=threshold_factor)
+    return datas
+
 def data_augmentation(d, label, position):
     # d = data_normalization(d)
     d, dis, angle = random_translation(d, position)
@@ -203,6 +208,7 @@ def data_augmentation(d, label, position):
     d, label = random_reverse(d, label)
     d = random_data_len_adjust(d)
     d = random_scale_radiated_power(d, position, dis, angle)
+    # d = cfar(d)
     return d, label
 
 
@@ -229,9 +235,9 @@ def get_track(datas):
     #for i, frame in enumerate(datas):
     #    y = np.argmax(frame[x[i]])
     #    track[0, x[i], y] = frame[x[i], y]
-    track[0] = np.max(datas,axis=0)
-    track[1] = np.mean(datas, axis=0)
-    track[2] = np.std(datas, axis=0)
+    # track[0] = np.max(datas,axis=0)
+    # track[1] = np.mean(datas, axis=0)
+    # track[2] = np.std(datas, axis=0)
     #track[0] = data_normalization(track[0])
     return track
 

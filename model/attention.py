@@ -122,21 +122,24 @@ class ResidualMultiHeadAttention(nn.Module):
         self.w_q = nn.Linear(query_size, num_hidden, bias=bias)
         self.w_k = nn.Linear(key_size, num_hidden, bias=bias)
         self.w_v = nn.Linear(value_size, num_hidden, bias=bias)
-        self.w_o = nn.Linear(num_hidden, num_hidden, bias=bias)
-        self.dropout = nn.Dropout(p=0.4)
+        # self.w_o = nn.Linear(num_hidden, num_hidden, bias=bias)
+        self.dropout = nn.Dropout(p=0.5)
         nn.init.normal_(self.w_q.weight, mean=0, std=np.sqrt(2.0 / (query_size + key_size)))
         nn.init.normal_(self.w_k.weight, mean=0, std=np.sqrt(2.0 / (query_size + key_size)))
         nn.init.normal_(self.w_v.weight, mean=0, std=np.sqrt(2.0 / (query_size + value_size)))
 
     def forward(self, queries, keys, values, valid_lens=None):
+        res = queries
         queries = split_by_heads(self.w_q(queries), self.num_heads)
         keys = split_by_heads(self.w_k(keys), self.num_heads)
         values = split_by_heads(self.w_v(values), self.num_heads)
         if valid_lens is not None:
             valid_lens = torch.repeat_interleave(valid_lens, self.num_heads, dim=0)
         outputs = self.attention(queries, keys, values, valid_lens)
-        outputs = recover(queries + self.dropout(outputs), self.num_heads)
-        return self.w_o(outputs)
+        # outputs = recover(queries + self.dropout(outputs), self.num_heads)
+        outputs = recover(outputs, self.num_heads)
+        # return self.dropout(outputs) + res
+        return outputs
 
 class TemporalAttention(nn.Module):
     def __init__(self, in_size, dropout=0.5, squeeze_ratio=8, bias=False):
