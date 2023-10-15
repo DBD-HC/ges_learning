@@ -10,6 +10,7 @@ class MaskedBatchNorm2d(nn.BatchNorm2d):
 
     def forward(self, input, padded_length=None, valid_length=None, mask=None):
         self._check_input_dim(input)
+        res = torch.zeros_like(input)
 
         exponential_average_factor = 0.0
 
@@ -29,9 +30,11 @@ class MaskedBatchNorm2d(nn.BatchNorm2d):
                 mask = mask[None, :] < valid_length[:, None]
                 mask = mask.reshape(-1)
 
-            mean = input[mask].mean([0, 2, 3])
+            # mean = input[mask].mean([0, 2, 3])
+            mean = torch.mean(input[mask], dim=(0, 2, 3))
             # use biased var in train
-            var = input[mask].var([0, 2, 3], unbiased=False)
+            # var = input[mask].var([0, 2, 3], unbiased=False)
+            var = torch.var(input[mask], dim=(0, 2, 3), unbiased=True)
             n = input[mask].numel() / input.size(1)
             with torch.no_grad():
                 self.running_mean = exponential_average_factor * mean \
@@ -43,11 +46,11 @@ class MaskedBatchNorm2d(nn.BatchNorm2d):
             mean = self.running_mean
             var = self.running_var
 
-        input[mask] = (input[mask] - mean[None, :, None, None]) / (torch.sqrt(var[None, :, None, None] + self.eps))
+        res[mask] = (input[mask] - mean[None, :, None, None]) / (torch.sqrt(var[None, :, None, None] + self.eps))
         if self.affine:
-            input[mask] = input[mask] * self.weight[None, :, None, None] + self.bias[None, :, None, None]
+            res[mask] = input[mask] * self.weight[None, :, None, None] + self.bias[None, :, None, None]
 
-        return input
+        return res
 
 
 class MyLayerNorm(torch.nn.Module):

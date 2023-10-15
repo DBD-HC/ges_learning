@@ -91,9 +91,9 @@ def collate_fn(datas_and_labels):
 
 def train(train_set, test_set, start_epoch=0, net=None):
     if net is None:
-        net = RAIRadarGestureClassifier_2(cfar=True, track=True, spatial_channels=(4, 8, 16), ra_conv=True, heads=4,
-                                              track_channels=(6, 8, 16), track_out_size=32, hidden_size=(128, 128),
-                                              ra_feat_size=32, attention=True, cfar_expand_channels=16)
+        net = RAIRadarGestureClassifier(cfar=True, track=True, spatial_channels=(4, 8, 16), ra_conv=True, heads=4,
+                                              track_channels=(4, 8, 16), track_out_size=64, hidden_size=( 128, 128),
+                                              ra_feat_size=32, attention=True, cfar_expand_channels=8)
         # net.load_state_dict(torch.load('test_cross_environment_3.pth')['model_state_dict'])
 
     net = net.to(device)
@@ -315,19 +315,19 @@ if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # model_name = 'test.pth'
-    # five_fold_validation(fold_range=(0,3))
+    # five_fold_validation(fold_range=(3,5))
 
     # model_name = 'test_cross_person.pth'
     # cross_person()
     # cross_environment(device)
-    # clear_cache()
+    clear_cache()
     model_name = 'test_cross_environment_3.pth'
     cross_environment(env_range=(5, 6))
     # cross_environment(env_range=(4, 5))
     clear_cache()
     model_name = 'test_cross_position.pth'
     # net.load_state_dict(torch.load(model_name)['model_state_dict'])
-    cross_position((3, 5))
+    cross_position((4, 5))
     clear_cache()
     # net.load_state_dict(torch.load('test.pth')['model_state_dict'])
 

@@ -8,8 +8,8 @@ import math
 class MobileNetV1Block1D(nn.Module):
     def __init__(self, in_channel, out_channel):
         super(MobileNetV1Block1D, self).__init__()
-        self.conv1 = nn.Conv1d(in_channel, in_channel, groups= in_channel, kernel_size=3, padding=1, bias=False)
-        self.bn1 = MaskedBatchNorm1d(in_channel)
+        self.conv1 = nn.Conv1d(in_channel, in_channel, groups=in_channel, kernel_size=3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm1d(in_channel)
         self.conv2 = nn.Conv1d(in_channel, out_channel, kernel_size=1, bias=False)
         self.bn2 = MaskedBatchNorm1d(out_channel)
 
@@ -22,10 +22,11 @@ class MobileNetV1Block1D(nn.Module):
         x = F.relu(x, inplace=True)
         return x
 
+
 class MobileNetV1Block2D(nn.Module):
     def __init__(self, in_channel, out_channel):
         super(MobileNetV1Block2D, self).__init__()
-        self.conv1 = nn.Conv2d(in_channel, in_channel,groups=in_channel, kernel_size=3, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(in_channel, in_channel, groups=in_channel, kernel_size=3, padding=1, bias=False)
         self.bn1 = MaskedBatchNorm2d(in_channel)
         self.conv2 = nn.Conv2d(in_channel, out_channel, kernel_size=1, bias=False)
         self.bn2 = MaskedBatchNorm2d(out_channel)
@@ -38,6 +39,7 @@ class MobileNetV1Block2D(nn.Module):
         x = self.bn2(x, mask=mask)
         x = F.relu(x, inplace=True)
         return x
+
 
 class InvertedResidual(nn.Module):
     def __init__(self, inp, oup, stride, expand_ratio):
@@ -79,37 +81,50 @@ class InvertedResidual(nn.Module):
         else:
             return self.conv(x)
 
+
 class Conv2dBnRelu(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel_size=(3, 3), stride=1, group=1, padding=1, dilation=1):
+    def __init__(self, in_channel, out_channel, kernel_size=(3, 3), stride=1, group=1, padding=1, dilation=1, active =True, bn=True):
         super(Conv2dBnRelu, self).__init__()
-        self.conv = nn.Conv2d(in_channel, out_channel,dilation=dilation,
-                               kernel_size=kernel_size, padding=padding, stride=stride, bias=False, groups=group)
-        self.bn = MaskedBatchNorm2d(out_channel)
-
-    def forward(self, x, mask):
-        x = self.conv(x)
-        x = F.leaky_relu(x)
-        x = self.bn(x, mask=mask)
-        return x
-
-class Conv1dBnRelu(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel_size=3, stride=1, group=1, padding=1, dilation=1, bn=True, active=True):
-        super(Conv1dBnRelu, self).__init__()
-        self.conv = nn.Conv1d(in_channel, out_channel,dilation=dilation,
-                               kernel_size=kernel_size, padding=padding, stride=stride, bias=False, groups=group)
-        self.need_bn = bn
-        if bn:
-            self.bn = MaskedBatchNorm1d(out_channel)
+        self.conv = nn.Conv2d(in_channel, out_channel, dilation=dilation,
+                              kernel_size=kernel_size, padding=padding, stride=stride, bias=False, groups=group)
+        self.bn = None
         self.need_active = active
-
+        if bn:
+            # self.bn = MaskedBatchNorm2d(out_channel)
+            self.bn = nn.BatchNorm2d(out_channel)
 
     def forward(self, x, mask):
         x = self.conv(x)
         if self.need_active:
-            x = F.hardswish(x, inplace=False)
-        if self.need_bn:
-            x = self.bn(x, mask=mask)
+            x = F.relu(x)
+        if self.bn is not  None:
+            # x = self.bn(x, mask=mask)
+            x = self.bn(x)
         return x
+
+
+class Conv1dBnRelu(nn.Module):
+    def __init__(self, in_channel, out_channel, kernel_size=3, stride=1, group=1, padding=1, dilation=1, bias=False,
+                 bn=True, active=True):
+        super(Conv1dBnRelu, self).__init__()
+        self.conv = nn.Conv1d(in_channel, out_channel, dilation=dilation,
+                              kernel_size=kernel_size, padding=padding, stride=stride, bias=bias, groups=group)
+        self.need_bn = bn
+        if bn:
+            # self.bn = MaskedBatchNorm1d(out_channel)
+            self.bn = nn.BatchNorm1d(out_channel)
+        self.need_active = active
+
+    def forward(self, x, mask):
+        x = self.conv(x)
+        if self.need_active:
+            x = F.relu(x)
+        if self.need_bn:
+            # x = self.bn(x, mask=mask)
+            x = self.bn(x,)
+
+        return x
+
 
 class Rebu(nn.Module):
     def __init__(self, in_channel, out_channel, stride=1):
@@ -119,15 +134,16 @@ class Rebu(nn.Module):
             self.conv1 = Conv1dBnRelu(in_channel, out_channel)
         self.conv2 = Conv1dBnRelu(out_channel, out_channel, stride=stride)
         self.cutshort = None
-        if in_channel != out_channel and stride ==1:
+        if in_channel != out_channel and stride == 1:
             self.cutshort = Conv1dBnRelu(in_channel, out_channel, kernel_size=1, padding=0)
+
     def forward(self, x, mask):
         res = x
         if self.conv1 is not None:
             x = self.conv1(x, mask)
         x = self.conv2(x, mask)
         if self.cutshort is not None:
-            x = x +self.cutshort(res, mask)
+            x = x + self.cutshort(res, mask)
         return x
 
 
@@ -149,22 +165,21 @@ class SingleDimConvV2(nn.Module):
         return x
 
 
-
 class SingleDimConv(nn.Module):
     def __init__(self, in_channel, channel_num, input_size=32, dropout=0.):
         super(SingleDimConv, self).__init__()
-        self.expand = Conv1dBnRelu(in_channel, channel_num[0], kernel_size=1, padding=0, bn=True)
-        self.conv1 = Conv1dBnRelu(channel_num[0], channel_num[0], bn=True)
+        self.expand = Conv1dBnRelu(in_channel, channel_num[0], kernel_size=1, padding=0, bn=True, active=True)
+        self.conv1 = Conv1dBnRelu(channel_num[0], channel_num[0], kernel_size=3, padding=1, bn=True, active=True)
         # self.ln1 = nn.LayerNorm(input_size)
         # self.dw1 = Conv1dBnRelu(channel_num[0], channel_num[0], stride=2, group=channel_num[0])
-        self.conv2 = Conv1dBnRelu(channel_num[0], channel_num[1], bn=True, active=True)
+        self.conv2 = Conv1dBnRelu(channel_num[0], channel_num[1], kernel_size=3, padding=1, bn=True, active=True)
         # self.ln2 = nn.LayerNorm(input_size)
         # self.dw2 = Conv1dBnRelu(channel_num[1], channel_num[1], stride=2, group=channel_num[1])
-        self.conv3 = Conv1dBnRelu(channel_num[1], channel_num[2], bn=True, active=False)
+        self.conv3 = Conv1dBnRelu(channel_num[1], channel_num[2], kernel_size=3, padding=1, bn=False, active=False)
         # self.ln3 = nn.LayerNorm(input_size)
         # self.ln4 = nn.LayerNorm(input_size)
         # self.dw3 = Conv1dBnRelu(channel_num[2], channel_num[2], stride=2, group=channel_num[2])
-        self.down_sample=None
+        self.down_sample = None
         if in_channel != channel_num[2]:
             self.down_sample = Conv1dBnRelu(in_channel, channel_num[2], kernel_size=1, padding=0, bn=False)
         self.bn = MaskedBatchNorm1d(channel_num[2])
@@ -180,18 +195,19 @@ class SingleDimConv(nn.Module):
         # x = self.ln2(x)
         x = self.dropout1(x)
         # x = self.dw1(x, mask)
-        x = self.mp(x)
         x = self.conv2(x, mask)
         # x = self.ln3(x)
         # x = self.ap(x)
-        x = self.mp(x)
         x = self.conv3(x, mask)
         # x = self.ap(x)
-        x = self.mp(x)
         if self.down_sample is not None:
             res = self.down_sample(res, mask)
         # x = self.bn(res + x, mask=mask)
-        # x = x + res
+        x = x + res
+        x = F.relu(x)
+        x = self.bn(x, mask=mask)
+        # x = F.relu(x)
+
         return x
 
 
@@ -199,15 +215,16 @@ class s_block(nn.Module):
     def __init__(self, in_channel, out_channel, expand_factor=1, stride=1, activae=True):
         super(s_block, self).__init__()
         self.need_shortcut = False
-        if in_channel==out_channel and stride==1:
+        if in_channel == out_channel and stride == 1:
             self.need_shortcut = True
-        hidden_size = in_channel*expand_factor
+        hidden_size = in_channel * expand_factor
         self.expand = Conv1dBnRelu(in_channel, hidden_size, padding=0, kernel_size=1)
-        self.dw = Conv1dBnRelu(hidden_size,hidden_size, group=hidden_size,stride=stride, kernel_size=3, padding=1)
+        self.dw = Conv1dBnRelu(hidden_size, hidden_size, group=hidden_size, stride=stride, kernel_size=3, padding=1)
         self.ag = Conv1dBnRelu(hidden_size, out_channel, padding=0, kernel_size=1, active=activae)
+
     def forward(self, x, mask):
         # x = self.ln1(x)
-        res= x
+        res = x
         x = self.expand(x, mask)
 
         x = self.dw(x, mask)
@@ -218,10 +235,11 @@ class s_block(nn.Module):
         return x
 
 
-class SE1dBlock(nn.Module):
+
+class AttSE1dBlock(nn.Module):
     def __init__(self, in_channel, radio=1.0):
-        super(SE1dBlock, self).__init__()
-        hidden_size = math.ceil(in_channel*radio)
+        super(AttSE1dBlock, self).__init__()
+        hidden_size = math.ceil(in_channel * radio)
         self.fc1 = nn.Linear(in_channel, hidden_size, bias=False)
         self.fc2 = nn.Linear(hidden_size, in_channel, bias=False)
 
@@ -230,46 +248,79 @@ class SE1dBlock(nn.Module):
         weight = self.fc1(weight)
         weight = F.relu(weight)
         weight = self.fc2(weight)
-        weight = F.relu(weight)
+        weight = torch.softmax(weight, dim=-1)
 
-        weight = weight[:,:,None]
-        x = weight * x
+        # weight = weight[:,:,None]
 
+        return weight
+
+
+class ResBlock(nn.Module):
+    def __init__(self, in_channel=32, out_channel=32, ratio=2, stride=1):
+        super(ResBlock, self).__init__()
+        self.dot_conv1 = Conv1dBnRelu(in_channel, in_channel * ratio, kernel_size=1, bn=True, active=True, padding=0)
+        self.dw_conv1 = Conv1dBnRelu(in_channel * ratio, in_channel * ratio, kernel_size=3, bn=True, active=True,
+                                     padding=1, group=in_channel * ratio)
+        self.dot_conv2 = Conv1dBnRelu(in_channel * ratio, out_channel, kernel_size=1, bn=True, active=False, padding=0)
+        self.shortcut = False
+        if in_channel == out_channel and stride == 1:
+            self.shortcut = True
+
+    def forward(self, x, mask):
+        res = x
+        if self.shortcut is not None:
+            res = self.shortcut(res, mask)
+        x = self.dot_conv1(x, mask)
+        x = self.dw_conv1(x, mask)
+        x = self.dot_conv2(x, mask)
+        x = x + res
+        x = torch.relu(x)
         return x
 
 
 class SingleDimConv2(nn.Module):
-    def __init__(self, in_channel, channel_num, input_size=32, dropout=0.):
+    def __init__(self, in_channel=32, channel_num=None, input_size=32, dropout=0.5):
         super(SingleDimConv2, self).__init__()
-        # self.expand = Conv1dBnRelu(32, 32, kernel_size=1, padding=0, bn=True, active=False)
-        self.conv1 = Conv1dBnRelu(32, 16, bn=False, active=True, padding=0)
-        self.se1 = SE1dBlock(in_channel=16, radio=0.5)
-        # self.ln1 = nn.LayerNorm(input_size)
-        # self.dw1 = Conv1dBnRelu(channel_num[0], channel_num[0], stride=2, group=channel_num[0])
-        self.conv2 = Conv1dBnRelu(16, 8, bn=False, active=True, padding=0)
-        self.se2 = SE1dBlock(in_channel=8, radio=0.5)
-        # self.ln2 = nn.LayerNorm(input_size)
-        # self.dw2 = Conv1dBnRelu(channel_num[1], channel_num[1], stride=2, group=channel_num[1])
-        self.conv3 = Conv1dBnRelu(8, 3, bn=False, active=False, padding=0)
-        # self.ln3 = nn.LayerNorm(input_size)
-        # self.ln4 = nn.LayerNorm(input_size)
-        # self.dw3 = Conv1dBnRelu(channel_num[2], channel_num[2], stride=2, group=channel_num[2])
-        self.bn = MaskedBatchNorm1d(channel_num[2])
-        self.mp = nn.MaxPool1d(kernel_size=2, ceil_mode=True)
-        self.ap = nn.AvgPool1d(kernel_size=2, ceil_mode=True)
-        self.dropout1 = nn.Dropout(dropout)
+
+        self.bn = MaskedBatchNorm1d(3)
+
+        self.expand = Conv1dBnRelu(3, 8, kernel_size=3, bn=True, active=True, padding=1)
+
+        self.dot1 = Conv1dBnRelu(8, 16, kernel_size=1, bn=True, active=True, padding=0)
+        self.dw1 = Conv1dBnRelu(16, 16, kernel_size=3, group=16, bn=True, active=True, padding=1)
+        self.dot2 = Conv1dBnRelu(16, 8, kernel_size=1, bn=True, active=False, padding=0)
+
+        self.dw2 = Conv1dBnRelu(8, 8, kernel_size=3, group=8, bn=True, active=True, padding=1)
+        self.dot3 = Conv1dBnRelu(8, 8, kernel_size=1, bn=True, active=True, padding=0)
+
+        #self.dw3 = Conv1dBnRelu(16, 16, kernel_size=3, group=8, bn=True, active=True, padding=1)
+        #self.dot4 = Conv1dBnRelu(16, 16, kernel_size=1, bn=True, active=True, padding=0)
+
+        # self.fc1 = nn.Linear(16, 8, bias=False)
+
+        self.mp = nn.MaxPool1d(2, ceil_mode=True)
+        self.ap = nn.AvgPool1d(2, ceil_mode=True)
+        self.bn = MaskedBatchNorm1d(8)
+        self.bn2 = MaskedBatchNorm1d(16)
+        self.dp = nn.Dropout(0.5)
 
     def forward(self, x, mask):
-        # x = self.ln1(x)
+        x = self.expand(x, mask)
         res = x
-        x = self.conv1(x, mask)
-        x = self.se1(x)
-        # x = self.ln2(x)
-        # x = self.dw1(x, mask)
-        x = self.conv2(x, mask)
-        x = self.se2(x)
-        # x = self.ln3(x)
-        x = self.conv3(x, mask)
+        x = self.dot1(x, mask)
+        x = self.dw1(x, mask)
+        x = self.dot2(x, mask)
+        res = res + x
+        # res = self.dp(res)
+        # x = self.mp(x)
+        x = self.dw2(res, mask)
+        x = self.dot3(x, mask)
+        x = res + x
+        # x = self.bn(x, mask=mask)
+        # x = F.hardswish(x)
+        # x = self.mp(x)
+        # x = self.dw3(x, mask)
+        # x = self.dot4(x, mask)
         return x
 
 
@@ -291,13 +342,14 @@ class CNN2d3LayersV2(nn.Module):
     def forward(self, x, mask):
         x = self.conv1(x, mask)
         # x = self.dw1(x, mask)
-        x = self.mp(x)
+        # x = self.mp(x)
         x = self.conv2(x, mask)
         x = self.dropout1(x)
-        x = self.ap(x)
+        # x = self.ap(x)
         x = self.conv3(x, mask)
-        x = self.ap(x)
+        # x = self.ap(x)
         return x
+
 
 class CNN2d3Layers(nn.Module):
     def __init__(self, in_channel, channel_num):
@@ -305,6 +357,26 @@ class CNN2d3Layers(nn.Module):
         self.conv1 = Conv2dBnRelu(in_channel, channel_num[0])
         self.conv2 = Conv2dBnRelu(channel_num[0], channel_num[1])
         self.conv3 = Conv2dBnRelu(channel_num[1], channel_num[2])
+        self.mp = nn.MaxPool2d(kernel_size=2, ceil_mode=True)
+        self.ap = nn.AvgPool2d(kernel_size=2, ceil_mode=True)
+
+    def forward(self, x, mask=None):
+        x = self.conv1(x, mask)
+        x = self.mp(x)
+        x = self.conv2(x, mask)
+        x = self.ap(x)
+        x = self.conv3(x, mask)
+        x = self.ap(x)
+        return x
+
+
+class CNN2d3Layers2(nn.Module):
+    def __init__(self, in_channel, channel_num):
+        super(CNN2d3Layers2, self).__init__()
+        self.conv1 = Conv2dBnRelu(in_channel, channel_num[0], dilation=1, padding=1)
+        self.conv2 = Conv2dBnRelu(channel_num[0], channel_num[1], dilation=1, padding=1)
+        self.conv3 = Conv2dBnRelu(channel_num[1], channel_num[2], dilation=1, padding=1)
+
         self.mp = nn.MaxPool2d(kernel_size=2, ceil_mode=True)
         self.ap = nn.AvgPool2d(kernel_size=2, ceil_mode=True)
 
@@ -317,24 +389,12 @@ class CNN2d3Layers(nn.Module):
         x = self.ap(x)
         return x
 
-class CNN2d3Layers2(nn.Module):
-    def __init__(self, in_channel, channel_num):
-        super(CNN2d3Layers2, self).__init__()
-        self.conv1 = Conv2dBnRelu(in_channel, channel_num[0], dilation=2, padding=0)
-        self.conv2 = Conv2dBnRelu(channel_num[0], channel_num[1], dilation=2, padding=0)
-        self.conv3 = Conv2dBnRelu(channel_num[1], channel_num[2], dilation=2, padding=0)
-
-    def forward(self, x, mask):
-        x = self.conv1(x, mask)
-        x = self.conv2(x, mask)
-        x = self.conv3(x, mask)
-        return x
 
 class MobileNet1DV1(nn.Module):
     def __init__(self, in_channel, channel_num=(4, 8, 16)):
         super(MobileNet1DV1, self).__init__()
         self.conv1 = MobileNetV1Block1D(in_channel, channel_num[0])
-        self.mp1 = nn.MaxPool1d(kernel_size=2,ceil_mode=True)
+        self.mp1 = nn.MaxPool1d(kernel_size=2, ceil_mode=True)
         self.conv2 = MobileNetV1Block1D(channel_num[0], channel_num[1])
         self.ap1 = nn.MaxPool1d(kernel_size=2, ceil_mode=True)
         self.conv3 = MobileNetV1Block1D(channel_num[1], channel_num[2])
@@ -349,12 +409,11 @@ class MobileNet1DV1(nn.Module):
         return x
 
 
-
 class MobileNetV12D(nn.Module):
     def __init__(self, in_channel, channel_num=(16, 24, 32)):
         super(MobileNetV12D, self).__init__()
         self.conv1 = MobileNetV1Block2D(in_channel, channel_num[0])
-        self.dw = nn.MaxPool2d(kernel_size=2,ceil_mode=True)
+        self.dw = nn.MaxPool2d(kernel_size=2, ceil_mode=True)
         self.conv2 = MobileNetV1Block2D(channel_num[0], channel_num[1])
         self.ap1 = nn.MaxPool2d(kernel_size=2, ceil_mode=True)
         self.conv3 = MobileNetV1Block2D(channel_num[1], channel_num[2])
@@ -368,12 +427,14 @@ class MobileNetV12D(nn.Module):
         x = self.ap1(x)
         return x
 
+
 def conv_bn(inp, oup, stride):
     return nn.Sequential(
         nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
         nn.BatchNorm2d(oup),
         nn.ReLU6(inplace=True)
     )
+
 
 def conv_1x1_bn(inp, oup):
     return nn.Sequential(
@@ -386,6 +447,7 @@ def conv_1x1_bn(inp, oup):
 def make_divisible(x, divisible_by=8):
     import numpy as np
     return int(np.ceil(x * 1. / divisible_by) * divisible_by)
+
 
 class MobileNetV22D(nn.Module):
     def __init__(self, input_channel=2, last_channel=32, width_mult=1.):

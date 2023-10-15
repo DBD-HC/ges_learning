@@ -206,7 +206,7 @@ def data_augmentation(d, label, position):
     d, dis, angle = random_translation(d, position)
     d = random_geometric_features(d)
     d, label = random_reverse(d, label)
-    d = random_data_len_adjust(d)
+    d = random_data_len_adjust_2(d)
     d = random_scale_radiated_power(d, position, dis, angle)
     # d = cfar(d)
     return d, label

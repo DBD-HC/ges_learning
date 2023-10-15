@@ -123,7 +123,7 @@ class ResidualMultiHeadAttention(nn.Module):
         self.w_k = nn.Linear(key_size, num_hidden, bias=bias)
         self.w_v = nn.Linear(value_size, num_hidden, bias=bias)
         # self.w_o = nn.Linear(num_hidden, num_hidden, bias=bias)
-        self.dropout = nn.Dropout(p=0.5)
+        self.dropout = nn.Dropout(p=0.)
         nn.init.normal_(self.w_q.weight, mean=0, std=np.sqrt(2.0 / (query_size + key_size)))
         nn.init.normal_(self.w_k.weight, mean=0, std=np.sqrt(2.0 / (query_size + key_size)))
         nn.init.normal_(self.w_v.weight, mean=0, std=np.sqrt(2.0 / (query_size + value_size)))
@@ -138,8 +138,8 @@ class ResidualMultiHeadAttention(nn.Module):
         outputs = self.attention(queries, keys, values, valid_lens)
         # outputs = recover(queries + self.dropout(outputs), self.num_heads)
         outputs = recover(outputs, self.num_heads)
-        # return self.dropout(outputs) + res
-        return outputs
+        return self.dropout(outputs) + res
+        #return outputs
 
 class TemporalAttention(nn.Module):
     def __init__(self, in_size, dropout=0.5, squeeze_ratio=8, bias=False):

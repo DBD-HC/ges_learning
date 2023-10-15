@@ -3,7 +3,7 @@ import math
 import numpy as np
 import random
 
-data_len_adjust_gap = np.arange(2, 5)
+data_len_adjust_gap = [-5, -4, -3, 3, 4, 5]
 
 
 # rotating matrix
@@ -49,33 +49,37 @@ def data_normalization(d, *args):
     mean = np.mean(d)
     var = np.var(d)
     d = (d - mean) / np.sqrt(var + 1e-9)
+    # d = (d - np.min(d))/ (np.min(d) - d.max)
     return d
 
 
 def random_data_len_adjust_2(datas, p=0.5, gap=None):
+    if random.uniform(0, 1) > p:
+        return datas
     if gap is None:
         gap = random.choice(data_len_adjust_gap)
     frame_num = len(datas)
     shape = datas.shape
     datas = datas.reshape(shape[0], -1)
-    if random.uniform(0, 1) > p:
-        remove_indexes = np.arange(0, frame_num, gap)
+    if gap < 0:
+        remove_indexes = np.arange(np.abs(gap)-1, frame_num, np.abs(gap))
         datas = np.delete(datas, remove_indexes, axis=0)
     else:
-        j = 0
-        k = 0
-        insert_indexes = np.arange(1, frame_num - 1, gap)
-        new_datas = np.zeros((frame_num + len(insert_indexes), datas.shape[-1]))
-        for i in range(frame_num):
-            if k >= len(insert_indexes) or insert_indexes[k] != i:
-                new_datas[j] = datas[i]
-                j += 1
-            else:
-                new_datas[j] = (datas[i] + datas[i - 1]) / 2
-                new_datas[j + 1] = datas[i]
-                j += 2
-                k += 1
-        datas = new_datas
+        insert_index = frame_num // gap
+        if frame_num % gap == 0:
+            insert_index = insert_index - 1
+        new_data = np.zeros((frame_num + insert_index, datas.shape[-1]))
+        i = 0
+        count = gap
+        for frame in datas:
+            if count == 0:
+                new_data[i] = (frame + new_data[i - 1]) / 2
+                i = i + 1
+                count = gap
+            new_data[i] = frame
+            i = i + 1
+            count = count - 1
+        datas = new_data
     if len(shape) == 3:
         datas = datas.reshape(-1, shape[-2], shape[-1])
     else:
