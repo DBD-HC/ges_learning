@@ -20,7 +20,7 @@ gesture_index = np.arange(0, 800, 1)
 train_data, val_data, test_data = [], [], []
 train_label, val_label, test_label = [], [], []
 
-data_path = '/root/autodl-nas/'
+data_path = '/root/autodl-tmp/dataset/rdi'
 rdai_path = '/root/autodl-fs/air-writing'
 rdai_file_format = 'rdai_{user}_{ges}_{s}.npy'
 
@@ -256,6 +256,58 @@ def split_RDAI(p=0):
 
     return Gesture_Dataset(data_for_train, label_for_train, transform=data_augmentation), \
            Gesture_Dataset(data_for_test, label_for_test, transform=data_normalization)
+file_name_cache = []
+file_name_template = 'rdi_{}_{}_{}.npy'
+def k_fold(p=0):
+    file_name_cache = os.listdir(data_path)
+    data_for_train = []
+    label_for_train = []
+    data_for_test = []
+    label_for_test = []
+    i = 0
+
+    for participant in tqdm(participants):
+        for_test = (participant == participants[p])
+        for gesture in gestures:
+            i = 0
+            file_name = file_name_template.format(participant,gesture,str(i))
+            while(file_name in file_name_cache):
+                if for_test:
+                    data_for_test.append(file_name)
+                    label_for_test.append(int(gesture))
+                else:
+                    data_for_train.append(file_name)
+                    label_for_train.append(int(gesture))
+                i = i + 1
+                file_name = file_name_template.format(participant, gesture, str(i))
+    return Gesture_Dataset(data_for_train, label_for_train, transform=data_augmentation), \
+           Gesture_Dataset(data_for_test, label_for_test, transform=data_normalization)
+
+def new_split_data():
+    file_name_cache = os.listdir(data_path)
+    data_for_train = []
+    label_for_train = []
+    for participant in tqdm(participants):
+        for gesture in gestures:
+            i = 0
+            file_name = file_name_template.format(participant,gesture,str(i))
+            while(file_name in file_name_cache):
+                data_for_train.append(file_name)
+                label_for_train.append(int(gesture))
+                i = i + 1
+                file_name = file_name_template.format(participant, gesture, str(i))
+    # 合并两个序列为元组列表
+    combined_sequence = list(zip(data_for_train, label_for_train))
+    # 打乱元组列表
+    random.shuffle(combined_sequence)
+    # 拆分打乱后的元组列表为两个序列
+    data_for_train, label_for_train = zip(*combined_sequence)
+    train_size = math.floor(len(data_for_train) * 0.8)
+    val_size = math.floor(len(data_for_train) * 0.15)
+    return Gesture_Dataset(data_for_train[:train_size], label_for_train[:train_size], transform=data_augmentation), \
+           Gesture_Dataset(data_for_train[train_size:], label_for_train[train_size:], transform=data_normalization),\
+           Gesture_Dataset(data_for_train[train_size+val_size:], label_for_train[train_size+val_size:], transform=data_normalization)
+
 
 
 class Gesture_Dataset(Dataset):
@@ -266,15 +318,12 @@ class Gesture_Dataset(Dataset):
         self.len = len(self.filenames)
 
     def __getitem__(self, index):
-        data = file_cache[self.filenames[index]]
+        data = np.load(os.path.join(data_path, self.filenames[index]))
         label = self.labels[index]
-        res = self.transform(data, label)
-        if isinstance(res, tuple):
-            data = res[0]
-            label = res[1]
-        else:
-            data = res
-        data = np.sum(data, axis=0)
+        # res = self.transform(data, label)
+        data_var = np.var(data)
+        data_mean = np.mean(data)
+        data = (data - data_mean)/np.sqrt((data_var + 1e-9))
         return torch.from_numpy(data).type(torch.float32), torch.tensor(label)
 
     def __len__(self):

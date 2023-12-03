@@ -23,6 +23,8 @@ locations = ['p1', 'p2', 'p3', 'p4', 'p5']
 # root = 'D:\\data\\mmWave_cross_domain_gesture_dataset'
 # root = '/root/autodl-nas/mmWave_cross_domain_gesture_dataset'
 root = '/root/autodl-tmp/dataset/mmWave_cross_domain_gesture_dataset'
+# root = '/root/autodl-tmp/dataset/mmwave_rai_lessrx'
+#root = '/root/autodl-tmp/dataset/mmwave_rai_2rx'
 
 st = {'e1': 0, 'e2': 0, 'e3': 0, 'e4': 0, 'e5': 0, 'e6': 0}
 st_act = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0}
@@ -32,7 +34,6 @@ train_label_list = []
 test_data_filenames = []
 test_label_list = []
 file_cache = {}
-
 
 filenames_set = set(os.listdir(root))
 print('========加载文件缓存========')
@@ -55,9 +56,6 @@ def check_and_get(prefix):
         index += 1
         file_name = prefix.format(index)
     return samples
-
-
-
 
 
 def assign_samples_k_fold(ges_type, samples):
@@ -153,9 +151,6 @@ def random_translation(datas, position, p=0.5):
     return datas, d_distance, d_angle
 
 
-
-
-
 def random_scale_radiated_power(datas, position, distance, angle, p=0.5):
     #  if position < locations[3]:
     #         if abs(angle) > 10:
@@ -201,6 +196,7 @@ def cfar(datas):
         datas[i] = ca_cfar_2d(frame, thr_factor=threshold_factor)
     return datas
 
+
 def data_augmentation(d, label, position):
     # d = data_normalization(d)
     d, dis, angle = random_translation(d, position)
@@ -232,13 +228,13 @@ def get_track(datas):
     # d_range = datas.sum(axis=2)
     # x = np.argmax(d_range, axis=1)
     track = np.zeros((3, datas.shape[-2], datas.shape[-1]))
-    #for i, frame in enumerate(datas):
+    # for i, frame in enumerate(datas):
     #    y = np.argmax(frame[x[i]])
     #    track[0, x[i], y] = frame[x[i], y]
     # track[0] = np.max(datas,axis=0)
     # track[1] = np.mean(datas, axis=0)
     # track[2] = np.std(datas, axis=0)
-    #track[0] = data_normalization(track[0])
+    # track[0] = data_normalization(track[0])
     return track
 
 
@@ -250,11 +246,13 @@ def combine(index):
 
 pre_domain = ['sos']
 
+
 def clear_cache():
     train_data_filenames.clear()
     train_label_list.clear()
     test_data_filenames.clear()
     test_label_list.clear()
+
 
 def split_data(domain, fold=0, env_index=0, position_index=0):
     file_format = '{act}_{env}_{user}'
@@ -320,15 +318,78 @@ def split_data(domain, fold=0, env_index=0, position_index=0):
         return combine(position_index)
 
 
+from itertools import combinations, permutations
+
+
+def domain_reduction_split(train_domain, test_domain, augmentation=False):
+    clear_cache()
+    file_format = '{act}_{env}_{user}_{pos}_s{sample}.npy'
+    for i, act in enumerate(itertools.chain(gestures, negative_samples)):
+        for u in participants:
+            for e in envs:
+                for p in locations:
+                    s = 1
+                    file_name = file_format.format(act=act, env=e, user=u, pos=p, sample=str(s))
+                    while file_name in filenames_set:
+                        if u in train_domain or e in train_domain or p in train_domain:
+                            train_data_filenames.append(file_name)
+                            train_label_list.append(i)
+                        elif test_domain is None or u in test_domain or e in test_domain or p in test_domain:
+                            test_data_filenames.append(file_name)
+                            test_label_list.append(i)
+                        s = 1 + s
+                        file_name = file_format.format(act=act, env=e, user=u, pos=p, sample=str(s))
+
+    train_set = di_gesture_dataset(train_data_filenames, train_label_list, data_augmentation,
+                                   need_augmentation=augmentation)
+    test_set = di_gesture_dataset(test_data_filenames, test_label_list, data_normalization,
+                                  need_augmentation=augmentation)
+
+    return train_set, test_set
+
+
+def data_len_variation_split(train_data_len=(25, 35), augmentation=False):
+    clear_cache()
+    file_format = '{act}_{env}_{user}_{pos}_s{sample}.npy'
+    for i, act in enumerate(itertools.chain(gestures, negative_samples)):
+        for u in participants:
+            for e in envs:
+                for p in locations:
+                    s = 1
+                    file_name = file_format.format(act=act, env=e, user=u, pos=p, sample=str(s))
+                    while file_name in filenames_set:
+                        sample = np.load(os.path.join(root, file_name))
+                        if train_data_len[0] < len(sample) < train_data_len[1]:
+                            train_data_filenames.append(file_name)
+                            train_label_list.append(i)
+                        else:
+                            test_data_filenames.append(file_name)
+                            test_label_list.append(i)
+                        s = 1 + s
+                        file_name = file_format.format(act=act, env=e, user=u, pos=p, sample=str(s))
+    train_set = di_gesture_dataset(train_data_filenames, train_label_list, data_augmentation,
+                                   need_augmentation=augmentation)
+    test_set = di_gesture_dataset(test_data_filenames, test_label_list, data_normalization,
+                                  need_augmentation=augmentation)
+
+    return train_set, test_set
+
 class di_gesture_dataset(Dataset):
-    def __init__(self, file_names, labels, transform=None, max_frames=128):
+    def __init__(self, file_names, labels, transform=None, max_frames=128, need_augmentation=True, data_root=None):
         self.len = len(file_names)
         self.max_frame = max_frames
         self.file_names = np.array(file_names)
 
         self.labels = np.array(labels)
         self.labels = np.where(self.labels < 6, labels, 6)
-        self.transform = transform
+        if data_root is not None:
+            self.data_root = data_root
+        else:
+            self.data_root = root
+        if need_augmentation:
+            self.transform = transform
+        else:
+            self.transform = data_normalization
         self.positions = []
         for i, name in enumerate(self.file_names):
             inf = name.split('_')
@@ -338,7 +399,7 @@ class di_gesture_dataset(Dataset):
                 self.positions.append('p6')
 
     def __getitem__(self, index):
-        d = np.load(os.path.join(root, self.file_names[index]))
+        d = np.load(os.path.join(self.data_root, self.file_names[index]))
         # d = file_cache[self.file_names[index]]
         label = self.labels[index]
         res = self.transform(d, self.labels[index], self.positions[index])
@@ -355,7 +416,91 @@ class di_gesture_dataset(Dataset):
         return self.len
 
 
+def plot_data_len_stat():
+    statis = np.zeros((100, 7))
+    ges_index_map = {'Clockwise': 0, 'Counterclockwise': 1, 'Pull': 2, 'Push': 3, 'SlideLeft': 4, 'SlideRight': 5,
+                     'NG': 6}
+    for file_name in filenames_set:
+        inf = file_name.split('_')
+        sample_type = inf[0]
+        if sample_type == 'n':
+            ges_type = 'NG'
+        else:
+            ges_type = inf[1]
+        ges_index = ges_index_map[ges_type]
+        sample = np.load(os.path.join(root, file_name))
+        statis[len(sample), ges_index] += 1
+    print(statis)
+    visdom.bar(
+        X=statis[:, None],
+        opts=dict(
+            stacked=True,
+            ylabel='Number of Samples',
+            xlabel='Number of Frames',
+            legend=['Clockwise', 'Counterclockwise', 'Pull', 'Push', 'SlideLeft', 'SlideRight', 'NG']
+        )
+    )
+
+def plot_user_sample_stat():
+    statis = np.zeros((25, 7))
+    ges_index_map = {'Clockwise': 0, 'Counterclockwise': 1, 'Pull': 2, 'Push': 3, 'SlideLeft': 4, 'SlideRight': 5,
+                     'NG': 6}
+    for file_name in filenames_set:
+        inf = file_name.split('_')
+        user_index=int(inf[3][1:])-1
+
+        sample_type = inf[0]
+        if sample_type == 'n':
+            ges_type = 'NG'
+        else:
+            ges_type = inf[1]
+        ges_index = ges_index_map[ges_type]
+        statis[user_index, ges_index] += 1
+    print(statis)
+    visdom.bar(
+        X=statis[:, None],
+        win='user sample num',
+        opts=dict(
+            stacked=True,
+            ylabel='Number of Samples',
+            xlabel='Number of Frames',
+            legend=['Clockwise', 'Counterclockwise', 'Pull', 'Push', 'SlideLeft', 'SlideRight', 'NG']
+        )
+    )
+
+def plot_domain_stat_2():
+    statis = np.zeros((6, 7))
+    ges_index_map = {'Clockwise': 0, 'Counterclockwise': 1, 'Pull': 2, 'Push': 3, 'SlideLeft': 4, 'SlideRight': 5,
+                     'NG': 6}
+    for file_name in filenames_set:
+        inf = file_name.split('_')
+        env_index=int(inf[2][1:])-1
+
+        sample_type = inf[0]
+        if sample_type == 'n':
+            ges_type = 'NG'
+        else:
+            ges_type = inf[1]
+        ges_index = ges_index_map[ges_type]
+        statis[env_index, ges_index] += 1
+    print(statis)
+    visdom.bar(
+        X=statis[:, None],
+        win='user sample num',
+        opts=dict(
+            stacked=True,
+            ylabel='Number of Samples',
+            xlabel='Number of Frames',
+            legend=['Clockwise', 'Counterclockwise', 'Pull', 'Push', 'SlideLeft', 'SlideRight', 'NG']
+        )
+    )
+
+
 if __name__ == '__main__':
+    visdom = visdom.Visdom(env='statis', port=6006)
+    plot_domain_stat_2()
+
+    # drs = domain_reduction_split(('e1', 'e2'))
     train_datas, test_datas = split_data('cross_environment', env_index=3)
     visdom = visdom.Visdom(env='raw-data', port=6006)
     max_frame = 0
@@ -380,7 +525,7 @@ if __name__ == '__main__':
     for it in tqdm(permutation):
         data, track, label, index = test_datas.__getitem__(it)
         visdom.heatmap(track[0], win=str(label.item()),
-                           opts=dict(title='label = ' + test_datas.file_names[index]))
+                       opts=dict(title='label = ' + test_datas.file_names[index]))
 
         max_frame = max(max_frame, data.size()[0])
 

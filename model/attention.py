@@ -95,10 +95,10 @@ class MultiHeadAttention(nn.Module):
         super(MultiHeadAttention, self).__init__()
         self.num_heads = num_heads
         self.attention = DotProductAttention(dropout)
-        self.w_q = nn.Linear(query_size, num_hidden, bias=bias)
-        self.w_k = nn.Linear(key_size, num_hidden, bias=bias)
-        self.w_v = nn.Linear(value_size, num_hidden, bias=bias)
-        self.w_o = nn.Linear(num_hidden, num_hidden, bias=bias)
+        self.w_q = nn.Linear(query_size, num_hidden//2, bias=bias)
+        self.w_k = nn.Linear(key_size, num_hidden//2, bias=bias)
+        self.w_v = nn.Linear(value_size, num_hidden//2, bias=bias)
+        self.w_o = nn.Linear(num_hidden//2, num_hidden, bias=bias)
         nn.init.normal_(self.w_q.weight, mean=0, std=np.sqrt(2.0 / (query_size + key_size)))
         nn.init.normal_(self.w_k.weight, mean=0, std=np.sqrt(2.0 / (query_size + key_size)))
         nn.init.normal_(self.w_v.weight, mean=0, std=np.sqrt(2.0 / (query_size + value_size)))
@@ -112,53 +112,3 @@ class MultiHeadAttention(nn.Module):
         outputs = self.attention(queries, keys, values, valid_lens)
         outputs = recover(outputs, self.num_heads)
         return self.w_o(outputs)
-
-
-class ResidualMultiHeadAttention(nn.Module):
-    def __init__(self, key_size, query_size, value_size, num_hidden, num_heads, dropout, bias=False):
-        super(ResidualMultiHeadAttention, self).__init__()
-        self.num_heads = num_heads
-        self.attention = DotProductAttention(dropout)
-        self.w_q = nn.Linear(query_size, num_hidden, bias=bias)
-        self.w_k = nn.Linear(key_size, num_hidden, bias=bias)
-        self.w_v = nn.Linear(value_size, num_hidden, bias=bias)
-        # self.w_o = nn.Linear(num_hidden, num_hidden, bias=bias)
-        self.dropout = nn.Dropout(p=0.)
-        nn.init.normal_(self.w_q.weight, mean=0, std=np.sqrt(2.0 / (query_size + key_size)))
-        nn.init.normal_(self.w_k.weight, mean=0, std=np.sqrt(2.0 / (query_size + key_size)))
-        nn.init.normal_(self.w_v.weight, mean=0, std=np.sqrt(2.0 / (query_size + value_size)))
-
-    def forward(self, queries, keys, values, valid_lens=None):
-        res = queries
-        queries = split_by_heads(self.w_q(queries), self.num_heads)
-        keys = split_by_heads(self.w_k(keys), self.num_heads)
-        values = split_by_heads(self.w_v(values), self.num_heads)
-        if valid_lens is not None:
-            valid_lens = torch.repeat_interleave(valid_lens, self.num_heads, dim=0)
-        outputs = self.attention(queries, keys, values, valid_lens)
-        # outputs = recover(queries + self.dropout(outputs), self.num_heads)
-        outputs = recover(outputs, self.num_heads)
-        return self.dropout(outputs) + res
-        #return outputs
-
-class TemporalAttention(nn.Module):
-    def __init__(self, in_size, dropout=0.5, squeeze_ratio=8, bias=False):
-        super(TemporalAttention, self).__init__()
-        conv_in = in_size // squeeze_ratio
-        self.squeeze = nn.Linear(in_size, conv_in, bias=bias)
-        self.dp = nn.Dropout(dropout)
-        self.conv1 = Conv1dBnRelu(conv_in, conv_in//2, bias)
-        self.conv2 = Conv1dBnRelu(conv_in//2, conv_in//4, bias)
-        self.conv3 = Conv1dBnRelu(conv_in // 4, 1, bias)
-
-
-    def forward(self, k, v, mask):
-        # x = self.dp(k)
-        x = self.squeeze(k)
-        x = torch.transpose(x, -1, -2)
-        x = self.conv1(x, mask)
-        x = self.conv2(x, mask)
-        x = self.conv3(x, mask)
-        x = F.softmax(x)
-        x = torch.bmm(x, v)
-        return x

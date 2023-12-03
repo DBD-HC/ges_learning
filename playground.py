@@ -1,53 +1,86 @@
-import matplotlib.pyplot as plt
+import visdom
+from sklearn.manifold import TSNE
+import torch
 import numpy as np
+import h5py
 
-# 创建一个点数为 8 x 6 的窗口, 并设置分辨率为 80像素/每英寸
-plt.figure(figsize=(8, 6), dpi=80)
+vis = visdom.Visdom(env='playground', port=6006)
 
-# 再创建一个规格为 1 x 1 的子图
-plt.subplot(1, 1, 1)
+def tsne_test():
+    # 创建一个示例的高维数据集
+    data = torch.from_numpy(np.random.rand(100, 50))
+    # 创建一个 t-SNE 模型
+    tsne = TSNE(n_components=2)  # 降维为2维
 
-# 柱子总数
-N = 5
-# 包含每个柱子对应值的序列
-env_acc = (98.89795918367347, 99.27619047619047, 98.35164835164835, 99.05714285714285, 98.75, 93.90)
-env_acc_origin = (98.83673469387755, 98.8, 97.56043956043956, 97.37142857142858, 98.14285714285714, 94.59016393442623)
-position_acc = (99.08212560386473, 98.96135265700483, 99.05797101449275, 99.03381642512077, 99.05797101449275)
-position_acc_origin = (75.09661835748792, 70.7487922705314, 69.22705314009662, 74.97584541062802, 74.22705314009662)
-# 包含每个柱子下标的序列
-index = np.arange(N)
+    # 对数据运行 t-SNE
+    embedded_data = tsne.fit_transform(data)
 
-# 柱子的宽度
-width = 0.35
-
-# 绘制柱状图, 每根柱子的颜色为紫罗兰色
-p2 = plt.bar(index, position_acc_origin, width, label="origin", color="#87CEFA")
-p3 = plt.bar(index+width,  position_acc, width, label="new", color="blue")
+    # 创建散点图
+    scatter = vis.scatter(
+        X=embedded_data,  # 数据
+        win='manifold',
+        opts=dict(
+            title='Scatter Plot Example',  # 图表标题
+            markersize=5,  # 散点大小
+        )
+    )
 
 
-# 设置横轴标签
-plt.xlabel('positions')
-# 设置纵轴标签
-plt.ylabel('Accuracy(%)')
 
-# 添加标题
-plt.title('position acc ')
+def spiral_test():
+    # 生成螺旋曲线的坐标点
+    t = np.linspace(0, 10 * np.pi, 1000)  # 生成一千个点
+    x = t * np.cos(t)
+    y = t * np.sin(t)
 
-envs = ('Meet.', 'Liv.', 'Bed.', 'Off.A.', 'Lab.', 'Off.B.')
+    # 创建一个散点图
+    vis.scatter(
+        X=np.column_stack((x, y)),
+        win='diff',
+        opts=dict(
+            title='Spiral Curve',
+            xlabel='X-axis',
+            ylabel='Y-axis',
+            markersize=5,
+            markercolor=np.floor(np.random.rand(1000, 3))
+        )
+    )
 
-loc = ('p1', 'p2', 'p3','p4','p5')
+    # 创建一个散点图
+    vis.scatter(
+        X=np.column_stack((x + 10, y)),
+        update='append',
+        win='diff',
+        opts=dict(
+            title='Spiral Curve',
+            xlabel='X-axis',
+            ylabel='Y-axis',
+            markersize=5,
+            markercolor=np.floor(np.random.rand(1000, 3))
+        )
+    )
 
-temp = 0
-for i in position_acc:
-    temp += i
 
-print(temp/5)
+# spiral_test()
 
-# 添加纵横轴的刻度
-plt.xticks(index, loc)
-plt.ylim(50, 100)
 
-# 添加图例
-plt.legend(loc="upper right")
-plt.savefig('acc_env.png')
-plt.show()
+def get_history(filename='envacc.npy'):
+    log = np.load(filename)
+    print(log)
+
+solid_dataset_root='/root/autodl-tmp/dataset/dsp/'
+def get_solid_dataset(file_name = '1_0_0.h5', use_channel = 0):
+    # 打开HDF5文件
+    # 替换成你的文件路径
+    file_path = solid_dataset_root + file_name
+    with h5py.File(file_path, 'r') as file:
+        # 打印文件中的所有顶层对象
+        print("Top-level keys:", list(file.keys()))
+
+        # Data and label are numpy arrays
+        data = file['ch{}'.format(use_channel)][()]
+        label = file['label'][()]
+        print(label)
+
+
+get_solid_dataset()

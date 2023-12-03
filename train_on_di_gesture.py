@@ -4,6 +4,8 @@ import torchmetrics
 
 from data.di_gesture_dataset import *
 import torch.optim as optim
+
+from log_helper import LogHelper
 from model.network import *
 import matplotlib.pyplot as plt
 import visdom
@@ -15,6 +17,7 @@ from sklearn.preprocessing import label_binarize
 from sklearn.metrics import roc_auc_score, average_precision_score
 from torchmetrics.classification import MulticlassAccuracy, MulticlassAUROC, MulticlassAveragePrecision
 
+from model.radar_net import RadarNet
 
 history = {"acc_train": [], "acc_validation": [], "loss_train": [], "loss_validation": []}
 best_ture_label = []
@@ -23,17 +26,29 @@ acc_win = '1_acc'
 loss_win = '2_loss'
 vis = visdom.Visdom(env='model_result', port=6006)
 
+
+
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
 # 定义随机种子固定的函数
-def get_random_seed(seed):
+def set_random_seed(seed):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.cuda.manual_seed_all(seed)
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
+
+
 # 调用函数，设置随机种子为73
 # get_random_seed(73)
+set_random_seed(2023)
 
 
 def plot_result(file_name):
@@ -89,36 +104,34 @@ def collate_fn(datas_and_labels):
     # return datas, labels, torch.tensor(data_lengths), indexes
 
 
-def train(train_set, test_set, start_epoch=0, net=None):
+def train(train_set, test_set, start_epoch=0, total_epoch=200, batch_size=128, lr_list=None, lr_cfar=None, net=None):
     if net is None:
         net = RAIRadarGestureClassifier(cfar=True, track=True, spatial_channels=(4, 8, 16), ra_conv=True, heads=4,
-                                              track_channels=(4, 8, 16), track_out_size=64, hidden_size=( 128, 128),
-                                              ra_feat_size=32, attention=True, cfar_expand_channels=8)
+                                        track_channels=(4, 8, 16), track_out_size=64, hidden_size=(128, 128),
+                                        ra_feat_size=32, attention=True, cfar_expand_channels=8, in_channel=1)
+        # net = RadarNet(feat_size=(32, 32), in_channel=6, hidden_size=32, out_size=7)
         # net.load_state_dict(torch.load('test_cross_environment_3.pth')['model_state_dict'])
 
     net = net.to(device)
-    cfar_params = list(map(id, net.CFAR.parameters()))
     # lstm_nn_params = list(map(id,net.lstm.parameters()))
     # attention_params = list(map(id, net.multi_head_attention.parameters()))
-    base_params = filter(lambda p: id(p) not in cfar_params, net.parameters())
+    # base_params = filter(lambda p: id(p) not in cfar_params, net.parameters())
     # base_params = filter(lambda p: id(p) not in cfar_params, net.parameters())
 
     test_auc = MulticlassAUROC(num_classes=7, average='macro').to(device)
     test_ap = MulticlassAveragePrecision(num_classes=7, average='macro').to(device)
     optimizer = optim.Adam([
-        # {'params': net.parameters()},
-        {'params': base_params},
-        # {'params': net.lstm.parameters()},
-        # {'params': net.mult i_head_attention.parameters()},
-        {'params': net.CFAR.parameters(), 'lr': 0.0001},
-    ], lr=learning_rate)
+        {'params': net.parameters()},
+    ], lr=lr_list[0])
     criterion = nn.CrossEntropyLoss()
 
     trainloader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=8,
                                               pin_memory=True,
+                                              worker_init_fn=seed_worker,
                                               collate_fn=collate_fn)
     testloader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False,
                                              num_workers=8,
+                                             worker_init_fn=seed_worker,
                                              pin_memory=True,
                                              collate_fn=collate_fn)
     acc_best = 0
@@ -128,31 +141,15 @@ def train(train_set, test_set, start_epoch=0, net=None):
     previous_loss = 1000000
     ture_label = []
     predict_label = []
-    lr_list = np.zeros(total_epoch)
-    lr_list[:100] = 0.001
-    lr_list[100:150] = 0.0003
-    lr_list[150:] = 0.0001
-    lr_cfar = np.zeros(total_epoch)
-    lr_cfar[:100] = 0.0001
-    lr_cfar[100:150] = 0.00003
-    lr_cfar[150:] = 0.00001
 
-    pre_lr = 0
     for epoch in range(start_epoch, total_epoch):
-        if not pre_lr == lr_list[epoch]:
-            new_lr = lr_list[epoch]
-            pre_lr = lr_list[epoch]
-            print('!!!更新学习率 lr=' + str(new_lr))
-            optimizer.param_groups[0]['lr'] = new_lr
-            if len(optimizer.param_groups) > 1:
-                optimizer.param_groups[1]['lr'] = lr_cfar[epoch]
-            # train
+        optimizer.param_groups[0]['lr'] = lr_list[epoch]
+        if len(optimizer.param_groups) > 1:
+            optimizer.param_groups[1]['lr'] = lr_cfar[epoch]
         net.train()
         running_loss = 0.0
         all_sample = 0.0
         correct_sample = 0.0
-        # for i, (datas, labels, data_lengths, indexes) in enumerate(trainloader):
-        # for i, (datas, labels, data_lengths) in enumerate(trainloader):
         for i, (datas, tracks, labels, data_lengths, indexes) in enumerate(trainloader):
             datas = datas.to(device)
             tracks = tracks.to(device)
@@ -179,8 +176,11 @@ def train(train_set, test_set, start_epoch=0, net=None):
         train_acc = correct_sample / all_sample
         train_loss = running_loss / len(trainloader)
         print(
-            '[Train] all_samples: %.5f, correct_samples: %.5f,  loss: %.5f, accuracy: %.5f' % (
-                all_sample, correct_sample, train_loss, train_acc))
+            '[Train] lr:%.6f, all_samples: %.5f, correct_samples: %.5f,  loss: %.5f, accuracy: %.5f' % (lr_list[epoch],
+                                                                                                        all_sample,
+                                                                                                        correct_sample,
+                                                                                                        train_loss,
+                                                                                                        train_acc))
         history['acc_train'].append(train_acc)
         history['loss_train'].append(train_loss)
         ture_label.clear()
@@ -201,7 +201,7 @@ def train(train_set, test_set, start_epoch=0, net=None):
                 tracks = tracks.to(device)
                 data_lengths = data_lengths.to(device)
                 output = net(datas, tracks, data_lengths, epoch=epoch, indexes=indexes)
-                #output = net(datas, data_lengths, epoch=epoch, indexes=indexes)
+                # output = net(datas, data_lengths, epoch=epoch, indexes=indexes)
                 test_auc.update(output, labels)
                 test_ap.update(output, labels)
                 # output = net(datas, data_lengths)
@@ -214,7 +214,7 @@ def train(train_set, test_set, start_epoch=0, net=None):
                 val_correct_sample += (prediction == labels).sum().float().item()
         val_acc = val_correct_sample / val_all_sample
         val_loss = validation_loss / len(testloader)
-        val_auc =  test_auc.compute()
+        val_auc = test_auc.compute()
         val_ap = test_ap.compute()
         if val_acc > previous_acc or (val_acc == previous_acc and val_loss < previous_loss):
             acc_best = val_acc
@@ -257,77 +257,218 @@ def train(train_set, test_set, start_epoch=0, net=None):
     return acc_best, auc_best.cpu().detach().numpy(), ap_best.cpu().detach().numpy()
 
 
-def five_fold_validation(fold_range=(0, 5)):
+def five_fold_validation(fold_range=(0, 5), augmentation=True, need_cfar=True, epoch=200):
     res_history = []
+    lr_main, lr_cfar = get_lr(augmentation, epoch)
     for fold in range(fold_range[0], fold_range[1]):
         train_set, test_set = split_data('in_domain', fold)
-        res = train(train_set, test_set)
+        if not augmentation:
+            train_set.transform = test_set.transform
+        # net = RAIRadarGestureClassifier(cfar=need_cfar, track=True, spatial_channels=(4, 8, 16), ra_conv=True, heads=4,
+        #                                 track_channels=(4, 8, 16), track_out_size=64, hidden_size=(128, 128),
+        #                                 ra_feat_size=32, attention=True, cfar_expand_channels=8, in_channel=1)
+        net = DiGesture()
+        res = train(train_set, test_set, total_epoch=epoch, net=net, lr_list=lr_main, lr_cfar=lr_cfar)
         res_history.append(res)
         plot_result(fold)
         print('=====================fold{} for test history:{}================='.format(fold + 1, res_history))
-    np.save('indomainacc.npy', np.array(res_history))
+        np.save('indomainacc.npy', np.array(res_history))
     return res_history
 
 
-def cross_person():
+def five_fold_validation_rdi(fold_range=(0, 5), augmentation=True, need_cfar=True, diff=True, ra_conv=True, epoch=200):
+    res_history = []
+    lr_main, lr_cfar = get_lr(augmentation, epoch)
+    for fold in range(fold_range[0], fold_range[1]):
+        net = RAIRadarGestureClassifier(cfar=need_cfar, track=True, spatial_channels=(4, 8, 16), ra_conv=ra_conv, heads=4,
+                                        track_channels=(4, 8, 16), track_out_size=32, hidden_size=(128, 128),diff=diff,
+                                        ra_feat_size=32, attention=True, cfar_expand_channels=8, in_channel=1)
+        train_set, test_set = split_data('in_domain', fold)
+        train_set.data_root = ''
+        res = train(train_set, test_set, total_epoch=epoch, net=net, lr_list=lr_main, lr_cfar=lr_cfar)
+        res_history.append(res)
+        plot_result(fold)
+        print('=====================fold{} for test history:{}================='.format(fold + 1, res_history))
+        np.save('indomainacc.npy', np.array(res_history))
+    return res_history
+
+
+def cross_person(augmentation=True, need_cfar=True, ra_conv=True, diff=True, epoch=200):
+    lr_main, lr_cfar = get_lr(augmentation, epoch)
+    net = RAIRadarGestureClassifier(cfar=need_cfar, track=True, spatial_channels=(4, 8, 16), ra_conv=ra_conv, heads=4,
+                                    track_channels=(4, 8, 16), track_out_size=32, hidden_size=(128, 128),diff=diff,
+                                    ra_feat_size=32, attention=True, cfar_expand_channels=8, in_channel=1)
     train_set, test_set = split_data('cross_person')
-    res = train(train_set, test_set)
+    if not augmentation:
+        train_set.transform = test_set.transform
+    res = train(train_set, test_set, total_epoch=epoch, net=net, lr_list=lr_main, lr_cfar=lr_cfar)
+    loger.log(
+        'person augmentation{} need_cfar{} need_diff{}  res:{}================='.format(augmentation,
+                                                                                       need_cfar, diff, res))
     plot_result('cross_person')
     np.save('personacc.npy', np.array([res]))
     print('cross person accuracy {}'.format(res))
 
 
-def cross_environment(env_range=(0, 6)):
+def cross_environment(augmentation=True, need_cfar=True, env_range=(0, 6), ra_conv=True, diff=True, epoch=200):
     print('cross env')
     res_history = []
+    lr_main, lr_cfar = get_lr(augmentation, epoch)
     for e in range(env_range[0], env_range[1]):
         train_set, test_set = split_data('cross_environment', env_index=e)
-        res = train(train_set, test_set)
+        if not augmentation:
+            train_set.transform = test_set.transform
+        net = RAIRadarGestureClassifier(cfar=need_cfar, track=True, spatial_channels=(4, 8, 16), ra_conv=ra_conv, heads=4,
+                                        track_channels=(4, 8, 16), track_out_size=32, hidden_size=(128, 128),diff=diff,
+                                        ra_feat_size=32, attention=True, cfar_expand_channels=8, in_channel=1)
+        res = train(train_set, test_set, total_epoch=epoch, net=net, lr_list=lr_main, lr_cfar=lr_cfar)
+        loger.log(
+            'env{} augmentation{} need_cfar{} need_diff{}  res:{}================='.format(e + 1, augmentation,
+                                                                                                need_cfar, diff, res))
         res_history.append(res)
         plot_result('env_{}'.format(e))
         print('=====================env{} for test acc_history:{}================='.format(e + 1, res_history))
-    np.save('envacc.npy', np.array(res_history))
+        np.save('envacc.npy', np.array(res_history))
 
 
-def cross_position(loc_range=(4, 5), augmentation=True):
+def cross_position(loc_range=(4, 5), augmentation=True, need_cfar=True, diff=True, ra_conv=True, epoch=200):
     res_history = []
+    lr_main, lr_cfar = get_lr(augmentation, epoch)
     for p in range(loc_range[0], loc_range[1]):
         train_set, test_set = split_data('cross_position', position_index=p)
         if not augmentation:
             train_set.transform = test_set.transform
-        res = train(train_set, test_set)
+        net = RAIRadarGestureClassifier(cfar=need_cfar, track=False, spatial_channels=(4, 8, 16), ra_conv=ra_conv, heads=4,
+                                                track_channels=(4, 8, 16), track_out_size=32, hidden_size=(128, 128),diff=diff,
+                                                ra_feat_size=32, attention=True, cfar_expand_channels=8, in_channel=1)
+        # net = DiGesture()
+        res = train(train_set, test_set, total_epoch=epoch, net=net, lr_list=lr_main, lr_cfar=lr_cfar)
         res_history.append(res)
+        loger.log(
+            'position{} augmentation{} need_cfar{} need_diff{}  res:{}================='.format(p + 1, augmentation,
+                                                                                                need_cfar, diff, res))
         plot_result('position_{}'.format(p))
         print('=====================position{} for test acc_history:{}================='.format(p + 1, res_history))
-    np.save('posacc.npy', np.array(res_history))
+        np.save('posacc.npy', np.array(res_history))
     return res_history
 
 
-if __name__ == '__main__':
-    learning_rate = 0.001
-    LPP_lr = 0  # .001
+def domain_reduction_validation(d=0, n_reduction=1, augmentation=False):
+    if d == 0:
+        domains = envs
+    elif d == 1:
+        domains = participants
+    else:
+        domains = locations
+    if n_reduction == 0:
+        n_reduction = len(domains) + 1
+    else:
+        n_reduction += 1
+    epoch = 100
+    lr_main, lr_cfar = get_lr(augmentation, epoch)
+    for n in np.arange(1, n_reduction, 1):
+        res_history = []
+        combinations_list = combinations(domains, n)
+        print('变化域数:' + str(n))
+        print('变化域:' + str(combinations_list))
+        combinations_list = [('u1')]
+        test_domain = None
+        for i, train_domain in enumerate(combinations_list):
+            train_set, test_set = domain_reduction_split(train_domain, test_domain=test_domain,
+                                                         augmentation=augmentation)
+            net = RAIRadarGestureClassifier(cfar=True, track=True, spatial_channels=(4, 8, 16), ra_conv=True, heads=4,
+                                            track_channels=(4, 8, 16), track_out_size=64, hidden_size=(128, 128),
+                                            ra_feat_size=32, attention=True, cfar_expand_channels=8, in_channel=1)
+            res = train(train_set, test_set, net=net, total_epoch=epoch, lr_list=lr_main, lr_cfar=lr_cfar)
+            res_history.append(res)
+            # plot_result('position_{}'.format(p))
 
-    total_epoch = 200
-    batch_size = 128
+            print(
+                '=====================combination{} for test acc_history:{}================='.format(str(train_domain),
+                                                                                                     res_history))
+        np.save('domain_reduction_{}_validation_{}.npy'.format(str(d), str(n)), np.array(res_history))
+    return 0
+
+
+def data_len_variation_validation(augmentation=False):
+    res_history = []
+    epoch = 100
+    train_set, test_set = data_len_variation_split(augmentation=augmentation, train_data_len=(30, 35))
+    lr_main, lr_cfar = get_lr(augmentation, epoch)
+    print('=============序列长度变化验证 数据增强：{} 全局池化：{}=============='.format(augmentation, False))
+    net = RAIRadarGestureClassifier(cfar=True, track=False, spatial_channels=(4, 8, 16), ra_conv=True, heads=4,
+                                    track_channels=(4, 8, 16), track_out_size=64, hidden_size=(128, 128),
+                                    ra_feat_size=32, attention=False, cfar_expand_channels=8, in_channel=1)
+    res = train(train_set, test_set, total_epoch=epoch, net=net, lr_list=lr_main, lr_cfar=lr_cfar)
+    res_history.append(res)
+    print('=====================data_len_variation global False  for test acc_history:{}================='.format(
+        res_history))
+
+    print('=============序列长度变化验证 数据增强：{} 全局池化：{}============='.format(augmentation, True))
+    net = RAIRadarGestureClassifier(cfar=True, track=True, spatial_channels=(4, 8, 16), ra_conv=True, heads=4,
+                                    track_channels=(4, 8, 16), track_out_size=64, hidden_size=(128, 128),
+                                    ra_feat_size=32, attention=True, cfar_expand_channels=8, in_channel=1)
+    res = train(train_set, test_set, total_epoch=epoch, net=net, lr_list=lr_main, lr_cfar=lr_cfar)
+    res_history.append(res)
+    print('=====================data_len_variation global True  for test acc_history:{}================='.format(
+        res_history))
+
+    return 0
+
+
+def get_lr(augmentation=True, epoch=200):
+    lr_list = np.zeros(epoch)
+    lr_cfar = np.zeros(epoch)
+    if augmentation:
+        # lr_list = np.linspace(0.001, 0.0001, epoch)
+        lr_list[:epoch // 2] = 0.001
+        lr_list[epoch // 2:epoch // 2 + epoch // 4] = 0.0003
+        lr_list[epoch // 2 + epoch // 4:] = 0.0001
+        lr_cfar[:epoch // 2] = 0.0001
+        lr_cfar[epoch // 2:epoch // 2 + epoch // 4] = 0.00003
+        lr_cfar[epoch // 2 + epoch // 4:] = 0.00001
+    else:
+        lr_list[:epoch] = 0.0001
+        lr_cfar[:epoch] = 0.00001
+    return lr_list, lr_cfar
+
+
+if __name__ == '__main__':
+    # batch_size = 128
     # model_name = 'test.pth'
+    loger = LogHelper()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-    # model_name = 'test.pth'
-    # five_fold_validation(fold_range=(3,5))
-
-    # model_name = 'test_cross_person.pth'
-    # cross_person()
-    # cross_environment(device)
+    # model_name = 'data_len.pth'
+    # model_name = 'domain_e3_e6.pth'
+    # domain_reduction_validation()
+    # data_len_variation_validation()
+    model_name = 'test2.pth'
+    #five_fold_validation(fold_range=(0,5), augmentation=False, need_cfar=False, epoch=100)
     clear_cache()
-    model_name = 'test_cross_environment_3.pth'
-    cross_environment(env_range=(5, 6))
+    model_name = 'test_cross_person_no_aug.pth'
+    # cross_person(augmentation=False, ra_conv=False, diff=True, epoch=100)
+    clear_cache()
+    model_name = 'test_cross_person.pth'
+    # cross_person(augmentation=True,  ra_conv=False, diff=True, epoch=200)
+    clear_cache()
+    model_name = 'test_cross_environment_no_aug.pth'
+    # cross_environment(env_range=(0, 6), augmentation=False, ra_conv=False, epoch=100)
+    clear_cache()
+    model_name = 'test_cross_environment.pth'
+    # cross_environment(env_range=(0, 6), augmentation=True, ra_conv=False, epoch=200)
     # cross_environment(env_range=(4, 5))
+
+    # cross_environment(device)
+    # domain_reduction_validation()
+    clear_cache()
+    model_name = 'test_cross_position_no_aug.pth'
+    cross_position((0, 5), augmentation=False, ra_conv=True, epoch=100)
     clear_cache()
     model_name = 'test_cross_position.pth'
-    # net.load_state_dict(torch.load(model_name)['model_state_dict'])
-    cross_position((4, 5))
+    cross_position((0, 5), augmentation=True , ra_conv=True, epoch=200)
+
     clear_cache()
     # net.load_state_dict(torch.load('test.pth')['model_state_dict'])
 
