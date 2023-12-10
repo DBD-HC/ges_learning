@@ -16,7 +16,6 @@ from sklearn.preprocessing import label_binarize
 from sklearn.metrics import roc_auc_score, average_precision_score
 from torchmetrics.classification import MulticlassAccuracy, MulticlassAUROC, MulticlassAveragePrecision
 
-from model.radar_net import RadarNet
 
 def get_lr(epoch=200):
     lr_list = np.zeros(epoch)

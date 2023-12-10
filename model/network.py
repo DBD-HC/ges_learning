@@ -6,7 +6,6 @@ from cplxmodule.nn.modules.casting import TensorToCplx
 from cplxmodule.nn import RealToCplx, CplxToReal
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 
-from model.vae_classifier import VAE
 from utils import *
 from model.attention import *
 from model.mobile_net import *
@@ -201,8 +200,8 @@ class SpatialModel(nn.Module):
                  in_channels=1,
                  dropout=0.5):
         super(SpatialModel, self).__init__()
-        self.ap0 = nn.AvgPool2d(kernel_size=2, ceil_mode=True)
-        # self.conv_back_modeling = nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, bias=False)
+        self.ap0 = nn.AvgPool2d(kernel_size=4, ceil_mode=True)
+        self.conv_back_modeling = nn.Conv2d(in_channels, 8, kernel_size=3, padding=1, bias=False)
 
         self.need_ra_conv = ra_conv
 
@@ -214,13 +213,13 @@ class SpatialModel(nn.Module):
         # 是否需要角度距离注意力
         linear_input = num_channels[-1] * get_after_conv_size(size=in_size[0], kernel_size=3, layer=3, padding=1,
                                                               reduction=2) ** 2
-        sp_feat_size = out_size
+        # sp_feat_size = out_size
         if ra_conv:
             self.range_att = SpatialAttBlock(dim=-1, in_channel=in_channels, input_size=in_size[0], diff=diff,
                                              out_size=ra_feat_size)
             self.angel_att = SpatialAttBlock(dim=-2, in_channel=in_channels, input_size=in_size[1], diff=diff,
                                              out_size=ra_feat_size)
-            sp_feat_size = out_size - ra_feat_size * 2
+        sp_feat_size = out_size - ra_feat_size * 2
 
         self.spatial_conv = CNN2d3Layers(in_channels, num_channels)
         self.fc_1 = nn.Linear(linear_input, sp_feat_size, bias=False)
@@ -241,8 +240,8 @@ class SpatialModel(nn.Module):
         h = x.size(-2)
         w = x.size(-1)
         # x = self.range_se(torch.squeeze(x), mask)
-
         x = x.view(-1, self.in_channels, h, w)
+        #x = F.hardswish(x - t)
         range_score = None
         angel_score = None
         if self.need_ra_conv:
@@ -289,6 +288,13 @@ def custom_dropout_temporal(input_tensor, p=0.5, training=True):
     else:
         return input_tensor
 
+def dynamic_temporal(input_tensor, training=True, mean=1, std=0.01):
+    if training:
+        amp_rand = torch.normal(mean, std, size=(input_tensor.size(0), input_tensor.size(1), 1), device=input_tensor.device)
+        return input_tensor * amp_rand
+    else:
+        return input_tensor
+
 
 class DifferentialNetwork(nn.Module):
     def __init__(self, in_size, dropout=0.5):
@@ -306,13 +312,17 @@ class DifferentialNetwork(nn.Module):
             nn.LayerNorm(in_size),
             nn.Hardswish(),
         )
+        # self.featmap1=None
+        # self.featmap2=None
         self.dropout = dropout
         self.dp0 = nn.Dropout(dropout)
 
     def forward(self, x, batch_size, padded_len):
         x = self.linear_sp1(x)
         x = x.view(batch_size, padded_len, -1)
+        # self.featmap1 = x
         x = x[:, 1:] - x[:, :-1]
+        # self.featmap2 = x
         x = self.linear_sp2(x)
 
         return x
@@ -343,7 +353,7 @@ class TemporalModel(nn.Module):
             self.fc = nn.Linear(hidden_size, out_size)
         else:
             self.fc = None
-        self.bn = nn.LayerNorm(out_size)
+        self.bn = nn.BatchNorm1d(out_size)
         # self.ln = nn.LayerNorm(hidden_size)
         # self.bn_mid = nn.BatchNorm1d(hidden_size)
         self.dropout_1 = nn.Dropout(p=dropout)
@@ -453,22 +463,23 @@ class RAIRadarGestureClassifier(nn.Module):
         self.ra_feat_size = ra_feat_size
         self.sn = SpatialModel(ra_conv=ra_conv, in_size=in_size, num_channels=spatial_channels, diff=diff,
                                out_size=hidden_size[0], ra_feat_size=ra_feat_size, in_channels=in_channel)
+        fc_feat_size = 0
         if track:
             self.tn = GlobalConv(in_channels=in_channel, num_channels=track_channels, in_size=in_size,
                                  out_size=track_out_size)
-            self.fc_2 = nn.Linear(track_out_size + hidden_size[1], out_size)
-        else:
-            self.fc_2 = nn.Linear(hidden_size[1], out_size)
+            fc_feat_size = fc_feat_size + track_out_size
 
+        feat_size = hidden_size[0] - 2 * ra_feat_size
         if ra_conv:
-            feat_size = hidden_size[0] - 2 * ra_feat_size
             self.temporal_net = TemporalModel(feat_size1=feat_size, out_size=hidden_size[1], attention=attention,
                                               ra_conv=ra_conv, heads=heads, diff=diff,
                                               feat_size2=ra_feat_size)
+            fc_feat_size = fc_feat_size + hidden_size[1]
         else:
-            self.temporal_net = TemporalModel(hidden_size[0], hidden_size[1], attention=attention, diff=diff,
+            self.temporal_net = TemporalModel(feat_size1=feat_size, out_size=feat_size, attention=attention, diff=diff,
                                               ra_conv=ra_conv)
-
+            fc_feat_size = fc_feat_size + feat_size
+        self.fc_2 = nn.Linear(fc_feat_size, out_size)
         self.dropout_1 = nn.Dropout(p=dropout)
 
     def forward(self, x, data_length, **kwargs):
@@ -495,56 +506,7 @@ class RAIRadarGestureClassifier(nn.Module):
         return x
 
 
-class DiGesture(nn.Module):
-    def __init__(self, input_size=(32, 32), channel_num=(8, 16, 32), spatial_feat_size=128, hidden_size=128):
-        super(DiGesture, self).__init__()
-        self.conv1 = nn.Conv2d(1, channel_num[0], 3, bias=False, stride=2)
-        self.bn1 = nn.BatchNorm2d(channel_num[0])
-        self.input_size = input_size
-        self.spatial_feat_size = spatial_feat_size
-        self.conv2 = nn.Conv2d(channel_num[0], channel_num[1], 3, bias=False, stride=2)
-        self.bn2 = nn.BatchNorm2d(channel_num[1])
-        self.conv3 = nn.Conv2d(channel_num[1], channel_num[2], 3, bias=False, stride=2)
-        self.bn3 = nn.BatchNorm2d(channel_num[2])
-        self.maxpool = nn.MaxPool2d(2, ceil_mode=True)
-        self.CFAR = CFAR(3, in_channel=1, expand_channel=1)
-        self.lstm = nn.LSTM(input_size=spatial_feat_size, hidden_size=hidden_size, num_layers=1, batch_first=True)
-        linear_input = channel_num[-1] * get_after_conv_size(size=input_size[0], kernel_size=3, layer=3,
-                                                             reduction=2) \
-                       * get_after_conv_size(size=input_size[1], kernel_size=3, layer=3, reduction=2)
-        self.fc_2 = nn.Linear(linear_input, spatial_feat_size)
-        self.dropout = nn.Dropout(p=0.5)
-        self.fc_3 = nn.Linear(hidden_size, 7)
-        # self.flatten = nn.Flatten
-        self.softmax = nn.Softmax(dim=1)
 
-    def forward(self, x, track, data_length, **kwargs):
-        batch_size = x.size(0)
-        padding_len = x.size(1)
-        h = x.size(2)
-        w = x.size(3)
-        x = x.view(-1, 1, h, w)
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = F.relu(x)
-        x = x.view(batch_size, padding_len, -1)
-        x = self.fc_2(x)
-        x = self.dropout(x)
-        # x = x.view(batch_size, padding_len, 128)
-        x = pack_padded_sequence(x, data_length.cpu(), batch_first=True)
-        output, (h_n, c_n) = self.lstm(x)
-        # output, out_len = pad_packed_sequence(output, batch_first=True)
-        x = h_n[-1]
-        x = self.fc_3(x)
-        # x = self.softmax(x)
-
-        return x
 
 
 if __name__ == '__main__':

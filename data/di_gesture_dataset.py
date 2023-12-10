@@ -254,7 +254,7 @@ def clear_cache():
     test_label_list.clear()
 
 
-def split_data(domain, fold=0, env_index=0, position_index=0):
+def split_data(domain, fold=0, env_index=0, position_index=0, person_index=7):
     file_format = '{act}_{env}_{user}'
 
     if domain == 'in_domain':
@@ -279,11 +279,11 @@ def split_data(domain, fold=0, env_index=0, position_index=0):
         if len(train_data_filenames) == 0:
             for i, act in enumerate(itertools.chain(gestures, negative_samples)):
                 for e in envs:
-                    for u in participants[:7]:
+                    for u in participants[:person_index]:
                         samples, labels = get_samples(file_format, i, act, e, u)
                         train_data_filenames.extend(samples)
                         train_label_list.extend(labels)
-                    for u in participants[7:]:
+                    for u in participants[person_index:]:
                         samples, labels = get_samples(file_format, i, act, e, u)
                         test_data_filenames.extend(samples)
                         test_label_list.extend(labels)

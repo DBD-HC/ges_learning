@@ -17,7 +17,6 @@ from sklearn.preprocessing import label_binarize
 from sklearn.metrics import roc_auc_score, average_precision_score
 from torchmetrics.classification import MulticlassAccuracy, MulticlassAUROC, MulticlassAveragePrecision
 
-from model.radar_net import RadarNet
 
 history = {"acc_train": [], "acc_validation": [], "loss_train": [], "loss_validation": []}
 best_ture_label = []
@@ -371,7 +370,7 @@ def domain_reduction_validation(d=0, n_reduction=1, augmentation=False):
         combinations_list = combinations(domains, n)
         print('变化域数:' + str(n))
         print('变化域:' + str(combinations_list))
-        combinations_list = [('u1')]
+        #combinations_list = [('u1')]
         test_domain = None
         for i, train_domain in enumerate(combinations_list):
             train_set, test_set = domain_reduction_split(train_domain, test_domain=test_domain,
@@ -451,7 +450,7 @@ if __name__ == '__main__':
     # cross_person(augmentation=False, ra_conv=False, diff=True, epoch=100)
     clear_cache()
     model_name = 'test_cross_person.pth'
-    # cross_person(augmentation=True,  ra_conv=False, diff=True, epoch=200)
+    cross_person(augmentation=True,  ra_conv=False, diff=True, epoch=200)
     clear_cache()
     model_name = 'test_cross_environment_no_aug.pth'
     # cross_environment(env_range=(0, 6), augmentation=False, ra_conv=False, epoch=100)
@@ -464,10 +463,10 @@ if __name__ == '__main__':
     # domain_reduction_validation()
     clear_cache()
     model_name = 'test_cross_position_no_aug.pth'
-    cross_position((0, 5), augmentation=False, ra_conv=True, epoch=100)
+    # cross_position((0, 5), augmentation=False, ra_conv=True, epoch=100)
     clear_cache()
     model_name = 'test_cross_position.pth'
-    cross_position((0, 5), augmentation=True , ra_conv=True, epoch=200)
+    # cross_position((0, 5), augmentation=True , ra_conv=True, epoch=200)
 
     clear_cache()
     # net.load_state_dict(torch.load('test.pth')['model_state_dict'])
