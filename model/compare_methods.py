@@ -226,7 +226,7 @@ class FrameBlock2(nn.Module):
         self.bn1 = nn.BatchNorm2d(in_channels)
         self.active1 = nn.ReLU()
         self.dw2 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=3, groups=in_channels,
-                             bias=False)
+                             bias=False, padding=1)
         self.bn2 = nn.BatchNorm2d(in_channels)
         self.active2 = nn.ReLU()
         self.point3 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=1, bias=False)
@@ -258,7 +258,7 @@ class FrameBlock2(nn.Module):
         if self.need_shortcut:
             res = self.shortcut(res)
             res = self.active4(res)
-        x = x + res
+            x = x + res
 
         return x
 
@@ -269,9 +269,7 @@ class FrameModule(nn.Module):
         self.block1 = FrameBlock1(in_channels=in_channels)
         self.block2 = FrameBlock2(in_channels=in_channels, need_shortcut=True)
         self.block3 = FrameBlock2(in_channels=in_channels, need_shortcut=False)
-        linear_in = get_after_conv_size(feat_size[0] // 2, kernel_size=3, reduction=2, layer=2) * get_after_conv_size(
-            feat_size[1], kernel_size=3, reduction=2, layer=2)
-        self.dense4 = nn.Linear(linear_in, 64)
+        self.dense4 = nn.Linear(96, 64)
         self.active4 = nn.ReLU()
         self.dense5 = nn.Linear(64, 32)
         self.active5 = nn.ReLU()
@@ -279,7 +277,7 @@ class FrameModule(nn.Module):
     def forward(self, x, data_len=None):
         padding_len = x.size(1)
         batch_size = x.size(0)
-        x = self.view(-1, x.size(-3), x.size(-2), x.size(-1))
+        x = x.view(-1, x.size(-3), x.size(-2), x.size(-1))
         x = self.block1(x)
         x = self.block2(x)
         x = self.block3(x)
@@ -299,7 +297,7 @@ class TemporalModule(nn.Module):
         self.dense2 = nn.Linear(in_features=hidden_size, out_features=out_size)
 
     def forward(self, x, data_len=None):
-        x = pack_padded_sequence(x, data_len, batch_first=True)
+        x = pack_padded_sequence(x, data_len.cpu(), batch_first=True)
         x, (h, c) = self.lstm1(x)
         x = h[-1]
         x = self.dense2(x)
@@ -307,7 +305,7 @@ class TemporalModule(nn.Module):
 
 
 class RadarNet(nn.Module):
-    def __init__(self, feat_size=(32, 32), in_channel=6, hidden_size=32, out_size=7):
+    def __init__(self, feat_size=(32, 32), in_channel=8, hidden_size=32, out_size=7):
         super(RadarNet, self).__init__()
         self.frame_model = FrameModule(feat_size=feat_size, in_channels=in_channel)
         self.temporal_model = TemporalModule(hidden_size=hidden_size, out_size=out_size)
@@ -372,11 +370,11 @@ class DeepSolid(nn.Module):
     def __init__(self, feat_size=(224, 224), out_size=7):
         super(DeepSolid, self).__init__()
         self.conv1 = nn.Conv2d(1, 32, 3)
-        self.bn1 = nn.BatchNorm2d(32)
+        self.lrn1 = nn.LocalResponseNorm(size=32)
         self.conv2 = nn.Conv2d(32, 64, 3)
-        self.bn2 = nn.BatchNorm2d(64)
+        self.lrn2 = nn.LocalResponseNorm(size=32)
         self.conv3 = nn.Conv2d(64, 128, 3)
-        self.bn3 = nn.BatchNorm2d(128)
+        self.lrn3 = nn.LocalResponseNorm(size=32)
         self.dp_0 = nn.Dropout(0.4)
         linear_in = get_after_conv_size(size=feat_size[0], kernel_size=3, padding=0, layer=3)
         linear_in = 128 * linear_in * linear_in
@@ -392,14 +390,14 @@ class DeepSolid(nn.Module):
         h = x.size(-2)
         x = x.view(-1, 1, h, w)
         x = self.conv1(x)
-        x = self.bn1(x)
+        x = self.lrn1(x)
         x = F.relu(x)
         x = self.conv2(x)
-        x = self.bn2(x)
+        x = self.lrn2(x)
         x = F.relu(x)
         x = self.dp_0(x)
         x = self.conv3(x)
-        x = self.bn3(x)
+        x = self.lrn3(x)
         x = F.relu(x)
         x = self.dp_0(x)
         x = self.fc_1(x)

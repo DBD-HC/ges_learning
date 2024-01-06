@@ -204,6 +204,23 @@ def ca_cfar_2d(data, guard_size=2, train_size=4, thr_factor=2.5):
     data[detections] = min(data)
     return data
 
+def down_sample(frames, target_data_len):
+    data_len = len(frames)
+    n_delete_frame = data_len - target_data_len
+    gap = data_len / n_delete_frame
+    temp = 0
+    target_frames = torch.empty((target_data_len + 1, frames.size(-2), frames.size(-1)))
+    i = 0
+    for frame in frames:
+        temp += 1
+        if temp < gap:
+            target_frames[i] = frame
+            i += 1
+        else:
+            temp -= gap
+    return target_frames[:target_data_len]
+
+
 def getModelSize(model):
     param_size = 0
     param_sum = 0

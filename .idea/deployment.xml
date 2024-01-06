@@ -324,6 +324,13 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="root@region-3.seetacloud.com:32433">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/root/autodl-tmp/project" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="root@region-3.seetacloud.com:32796">
         <serverdata>
           <mappings>
@@ -380,7 +387,21 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="root@region-3.seetacloud.com:45822">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/root/autodl-tmp/project" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="root@region-3.seetacloud.com:47490">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/root/autodl-tmp/project" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@region-3.seetacloud.com:56448">
         <serverdata>
           <mappings>
             <mapping deploy="/root/autodl-tmp/project" local="$PROJECT_DIR$" />

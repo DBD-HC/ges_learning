@@ -23,6 +23,7 @@ locations = ['p1', 'p2', 'p3', 'p4', 'p5']
 # root = 'D:\\data\\mmWave_cross_domain_gesture_dataset'
 # root = '/root/autodl-nas/mmWave_cross_domain_gesture_dataset'
 root = '/root/autodl-tmp/dataset/mmWave_cross_domain_gesture_dataset'
+# root = '/root/autodl-tmp/dataset/mmWave_cd_rdi/mmwave_rdi'
 # root = '/root/autodl-tmp/dataset/mmwave_rai_lessrx'
 #root = '/root/autodl-tmp/dataset/mmwave_rai_2rx'
 
@@ -318,27 +319,33 @@ def split_data(domain, fold=0, env_index=0, position_index=0, person_index=7):
         return combine(position_index)
 
 
-from itertools import combinations, permutations
+def get_domain_reduction_samples(template, train_domain, test_domain, act_index, act, u=None, e=None, p=None):
+    s = 1
+    if p is not None:
+        template = template.format(act='{act}', env='{env}', user='{user}', pos=p, sample='{sample}')
+    file_name = template.format(act=act, env=e, user=u, sample=str(s))
+    while file_name in filenames_set:
+        if u in train_domain or e in train_domain or p in train_domain:
+            train_data_filenames.append(file_name)
+            train_label_list.append(act_index)
+        elif test_domain is None or u in test_domain or e in test_domain or p in test_domain:
+            test_data_filenames.append(file_name)
+            test_label_list.append(act_index)
+        s = 1 + s
+        file_name = template.format(act=act, env=e, user=u, sample=str(s))
 
 
 def domain_reduction_split(train_domain, test_domain, augmentation=False):
     clear_cache()
     file_format = '{act}_{env}_{user}_{pos}_s{sample}.npy'
+    file_format_walking = '{act}_{env}_{user}_s{sample}.npy'
     for i, act in enumerate(itertools.chain(gestures, negative_samples)):
         for u in participants:
             for e in envs:
+                if act == 'n_walking':
+                    get_domain_reduction_samples(file_format_walking, train_domain, test_domain, i, act, u, e)
                 for p in locations:
-                    s = 1
-                    file_name = file_format.format(act=act, env=e, user=u, pos=p, sample=str(s))
-                    while file_name in filenames_set:
-                        if u in train_domain or e in train_domain or p in train_domain:
-                            train_data_filenames.append(file_name)
-                            train_label_list.append(i)
-                        elif test_domain is None or u in test_domain or e in test_domain or p in test_domain:
-                            test_data_filenames.append(file_name)
-                            test_label_list.append(i)
-                        s = 1 + s
-                        file_name = file_format.format(act=act, env=e, user=u, pos=p, sample=str(s))
+                    get_domain_reduction_samples(file_format, train_domain, test_domain, i, act, u, e, p)
 
     train_set = di_gesture_dataset(train_data_filenames, train_label_list, data_augmentation,
                                    need_augmentation=augmentation)
@@ -495,8 +502,24 @@ def plot_domain_stat_2():
         )
     )
 
+def check():
+    rai = sorted(os.listdir('/root/autodl-tmp/dataset/mmWave_cross_domain_gesture_dataset'))
+    rdi = sorted(os.listdir('/root/autodl-tmp/dataset/mmWave_cd_rdi/mmwave_rdi'))
+    for i,v in enumerate(rai):
+        if v != rdi[i]:
+            print(v)
+
+def rename():
+    rd_path = '/root/autodl-tmp/dataset/mmWave_cd_rdi/mmwave_rdi'
+    file_format = 'n_walking_e6_u21_s{sample}.npy'
+
+    for i in range(10):
+        origin = file_format.format(sample=61+i)
+        new_name = file_format.format(sample=41 + i)
+        os.rename(os.path.join(rd_path, origin), os.path.join(rd_path, new_name))
 
 if __name__ == '__main__':
+    check()
     visdom = visdom.Visdom(env='statis', port=6006)
     plot_domain_stat_2()
 

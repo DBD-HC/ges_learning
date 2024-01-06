@@ -87,21 +87,18 @@ def soft_thresholding2(x, threshold):
 class CFAR(nn.Module):
     def __init__(self, window_size, in_channel=1, expand_channel=4, input_size=(32, 32)):
         super(CFAR, self).__init__()
-        self.conv1 = nn.Conv2d(in_channel, expand_channel, padding=0,
-                               kernel_size=1, groups=in_channel, dilation=1, bias=False)
-        # self.conv2 = nn.Conv2d(expand_channel, expand_channel, padding=1, padding_mode='reflect',
-        #                        kernel_size=3, dilation=1, groups=expand_channel, bias=False)
-        self.conv2 = nn.Conv2d(expand_channel, expand_channel, padding=2, padding_mode='reflect',
-                               kernel_size=5, dilation=1, groups=expand_channel, bias=False)
-        self.conv4 = nn.Conv2d(expand_channel, in_channel, padding=0,
-                               kernel_size=1, groups=in_channel, dilation=1, bias=False)
+        self.conv1 = nn.Conv2d(in_channel, expand_channel, padding=1, padding_mode='reflect',
+                               kernel_size=3, dilation=1, bias=False)
+        self.conv2 = nn.Conv2d(expand_channel, expand_channel, padding=1, padding_mode='reflect',
+                               kernel_size=3, dilation=1, bias=False)
+        self.conv3 = nn.Conv2d(expand_channel, in_channel, padding=1, padding_mode='reflect',
+                               kernel_size=3, dilation=1, bias=False)
         # init.uniform_(self.conv3.weight, 0.001, 0.002)
         # init.uniform_(self.conv1.weight, 0.8, 1.2)
         # init.uniform_(self.conv4.weight, 0.12, 0.13)
         # init.normal_(self.conv2.weight, 0, 0.04)
         # init.uniform_(self.conv3.weight, 0.10, 0.12)
 
-        self.visdom = visdom.Visdom(env='CFAR', port=6006)
         # self.bn3 = MaskedBatchNorm2d(in_channel)
         # self.ln = nn.LayerNorm(input_size)
         # self.bn = MaskedBatchNorm2d(1)
@@ -114,58 +111,38 @@ class CFAR(nn.Module):
 
     #  self.se3 = ThrSEBlock(expand_channel, radio=2)
 
-    def forward(self, x, mask=None, data_len=None, **kwargs):
+    def forward(self, x):
         thr = self.conv1(x)
         thr = self.ap(thr)
-        # thr = torch.repeat_interleave(thr, repeats=8, dim=-3)
         thr = self.conv2(thr)
-        # thr = self.ap(thr)
-        # w = self.se3(thr, mask)
-        # thr = soft_thresholding(thr, w[:, :, None, None])
-        # thr = self.ap(thr)
-
-        thr = self.conv4(thr)
-        thr = torch.repeat_interleave(thr, repeats=2, dim=-1)
-        thr = torch.repeat_interleave(thr, repeats=2, dim=-2)
+        thr = self.ap(thr)
+        thr = self.conv3(thr)
+        thr = torch.repeat_interleave(thr, repeats=4, dim=-1)
+        thr = torch.repeat_interleave(thr, repeats=4, dim=-2)
         res = x - thr
         res = F.relu(res)  # *torch.sigmoid(res)
-        res = self.bn(res)
-        if not self.training and 'indexes' in kwargs:
-            indexes = kwargs['indexes']
-            ids = str(kwargs['epoch'] % 10)
-            if 777 in indexes:
-                index = indexes.index(777)
-                x_t = x.view(len(indexes), -1, 32, 32)
-                th_t = thr.view(len(indexes), -1, 32, 32)
-                res_t = res.view(len(indexes), -1, 32, 32)
-
-                self.visdom.heatmap(x_t[index][13], win=ids + '_origin',
-                                    opts=dict(title=ids + 'origin' + str(kwargs['epoch'])))
-                self.visdom.heatmap(res_t[index][13], win=ids + '_cfar',
-                                    opts=dict(title=ids + 'cfar ' + str(kwargs['epoch'])))
-                self.visdom.heatmap(th_t[index][13], win=ids + '_cfar_thr',
-                                    opts=dict(title=ids + 'cfar thr' + str(kwargs['epoch'])))
 
         return res
 
 
 class SpatialAttBlock(nn.Module):
-    def __init__(self, in_channel=2, channel_num=(16, 8, 8), diff=True, input_size=32, out_size=32, dim=-1, dropout=0.5,
+    def __init__(self, in_channel=2, channel_num=(16, 8, 64), diff=True, input_size=32, out_size=32, dim=-1, dropout=0.2,
                  eps=1e-5):
         super(SpatialAttBlock, self).__init__()
-        self.single_dim_conv = SingleDimConv3(in_channel * 3, channel_num)
+        if dim == -1:
+            self.single_dim_conv = SingleDimConv3(in_channel * 3, channel_num)
+            linear_in = 128
+        else:
+            self.single_dim_conv = SingleDimConv4(in_channel * 3, channel_num)
+            linear_in = 128
         # linear_in = get_after_conv_size(size=input_size, kernel_size=5, layer=3, padding=0,
         #                                 reduction=1) * channel_num[-1]
-        linear_in = get_after_conv_size(size=input_size, kernel_size=3, layer=1, padding=1,
-                                        reduction=1) * channel_num[-1]
+
         # linear_in = 32
         self.dim = dim
         self.fc1 = nn.Linear(linear_in, out_size, bias=False)
 
         # self.bn1 = MaskedBatchNorm1d(in_channel * 3)
-        # self.bn1 = nn.BatchNorm1d(in_channel * 3)
-        # self.bn2 = MaskedBatchNorm1d(linear_in)
-        # self.bn3 = nn.BatchNorm1d(out_size)
         self.ln1 = nn.LayerNorm(out_size)
         self.dp = nn.Dropout(dropout)
         self.need_diff = diff
@@ -179,13 +156,15 @@ class SpatialAttBlock(nn.Module):
         avg_x = torch.mean(x, dim=self.dim)
         std_x = torch.std(x, dim=self.dim)
         avg_max = torch.cat((max_x, avg_x, std_x), dim=1)
+        #avg_max = self.dp(avg_max)
         # avg_max = self.bn1(avg_max, mask=mask)
-        # avg_max = self.bn1(avg_max)
-        score = self.single_dim_conv(avg_max, mask)
+        #avg_max = self.bn1(avg_max)
+        score = self.single_dim_conv(avg_max)
         score = score.view(len(x), -1)
         score = self.dp(score)
         # score = F.hardswish(score)
         score = self.fc1(score)
+        # score = self.ln1(score)
         score = self.ln1(score)
         score = F.relu(score)
         if self.need_diff:
@@ -196,71 +175,60 @@ class SpatialAttBlock(nn.Module):
 
 
 class SpatialModel(nn.Module):
-    def __init__(self, num_channels, ra_conv=True, diff=False, in_size=(32, 32), ra_feat_size=32, out_size=128,
+    def __init__(self, num_channels, ra_conv=True, diff=False, in_size=(32, 32), ra_feat_size=32, conv2d_feat_size=64,
                  in_channels=1,
-                 dropout=0.5):
+                 dropout=0.2):
         super(SpatialModel, self).__init__()
-        self.ap0 = nn.AvgPool2d(kernel_size=4, ceil_mode=True)
-        self.conv_back_modeling = nn.Conv2d(in_channels, 8, kernel_size=3, padding=1, bias=False)
 
         self.need_ra_conv = ra_conv
 
         self.dp = nn.Dropout(dropout)
         self.in_channels = in_channels
-        # self.range_se = SE1dBlock(32)
-        self.bn0 = nn.BatchNorm2d(self.in_channels)
 
         # 是否需要角度距离注意力
-        linear_input = num_channels[-1] * get_after_conv_size(size=in_size[0], kernel_size=3, layer=3, padding=1,
-                                                              reduction=2) ** 2
         # sp_feat_size = out_size
         if ra_conv:
             self.range_att = SpatialAttBlock(dim=-1, in_channel=in_channels, input_size=in_size[0], diff=diff,
                                              out_size=ra_feat_size)
             self.angel_att = SpatialAttBlock(dim=-2, in_channel=in_channels, input_size=in_size[1], diff=diff,
                                              out_size=ra_feat_size)
-        sp_feat_size = out_size - ra_feat_size * 2
-
-        self.spatial_conv = CNN2d3Layers(in_channels, num_channels)
-        self.fc_1 = nn.Linear(linear_input, sp_feat_size, bias=False)
-
-        # self.fc_2 = nn.Linear(linear_input, sp_feat_size//2, bias=False)
-        # self.fc_3 = nn.Linear(linear_input, sp_feat_size//2, bias=False)
-        self.ln1 = nn.LayerNorm(sp_feat_size)
-        # self.ln2 = nn.LayerNorm(sp_feat_size//2)
-        if diff:
-            self.diff = DifferentialNetwork(in_size=sp_feat_size)
-            # self.diff2 = DifferentialNetwork(in_size=ra_feat_size*2)
-
-        self.need_diff = diff
+        else:
+            linear_input = num_channels[-1] * get_after_conv_size(size=in_size[0], kernel_size=3, layer=3, padding=0,
+                                                                  reduction=2) ** 2
+            self.spatial_conv = CNN2d3Layers(in_channels, num_channels)
+            self.fc_1 = nn.Linear(linear_input, conv2d_feat_size, bias=False)
+            self.ln1 = nn.LayerNorm(conv2d_feat_size)
+            if diff:
+                self.diff = DifferentialNetwork(in_size=conv2d_feat_size)
+            self.need_diff = diff
 
     def forward(self, x, data_length, mask=None, **kwargs):
         batch_size = x.size(0)
         padded_len = x.size(1)
         h = x.size(-2)
         w = x.size(-1)
-        # x = self.range_se(torch.squeeze(x), mask)
         x = x.view(-1, self.in_channels, h, w)
-        #x = F.hardswish(x - t)
-        range_score = None
-        angel_score = None
+        range_feats = None
+        angel_feats = None
+        combine_feats = None
         if self.need_ra_conv:
-            range_score = self.range_att(x, batch_size=batch_size, padding_len=padded_len, data_len=data_length,
+            range_feats = self.range_att(x, batch_size=batch_size, padding_len=padded_len, data_len=data_length,
                                          mask=mask, **kwargs)
-            angel_score = self.angel_att(x, batch_size=batch_size, padding_len=padded_len, data_len=data_length,
+            angel_feats = self.angel_att(x, batch_size=batch_size, padding_len=padded_len, data_len=data_length,
                                          mask=mask, **kwargs)
-        x = self.spatial_conv(x, mask)
-        x = x.view(x.size(0), -1)
-        x = self.dp(x)
-        x = self.fc_1(x)
-        x = self.ln1(x)
-        x = F.relu(x)
-        if self.need_diff:
-            x = self.diff(x, batch_size, padded_len)
         else:
-            x = x.view(batch_size, padded_len, -1)
+            x = self.spatial_conv(x, mask)
+            x = x.view(x.size(0), -1)
+            x = self.dp(x)
+            x = self.fc_1(x)
+            x = self.ln1(x)
+            x = F.relu(x)
+            if self.need_diff:
+                combine_feats = self.diff(x, batch_size, padded_len)
+            else:
+                combine_feats = x.view(batch_size, padded_len, -1)
 
-        return x, range_score, angel_score
+        return combine_feats, range_feats, angel_feats
 
 
 def lstm_func(lstm_block, data, data_lens):
@@ -329,31 +297,31 @@ class DifferentialNetwork(nn.Module):
 
 
 class TemporalModel(nn.Module):
-    def __init__(self, feat_size1, out_size, attention=True, diff=True, ra_conv=True, feat_size2=None, heads=2,
+    def __init__(self, feat_size1, attention=True, diff=True, ra_conv=True, conv_2d=False, feat_size2=None, heads=2,
                  dropout=0.5):
         super(TemporalModel, self).__init__()
-        self.lstm_1 = nn.LSTM(input_size=feat_size1, hidden_size=feat_size1, num_layers=1, batch_first=True)
-        hidden_size = feat_size1
+        hidden_size = None
+        if conv_2d:
+            self.lstm_1 = nn.LSTM(input_size=feat_size1, hidden_size=feat_size1, num_layers=1, batch_first=True)
+            hidden_size = feat_size1
         if ra_conv:
             self.lstm_2 = nn.LSTM(input_size=feat_size2, hidden_size=feat_size2, num_layers=1,
                                   batch_first=True)
             self.lstm_3 = nn.LSTM(input_size=feat_size2, hidden_size=feat_size2, num_layers=1,
                                   batch_first=True)
-            hidden_size = feat_size1 + feat_size2 * 2
+            hidden_size = feat_size2 * 2
 
         self.need_attention = attention
         if attention:
             self.multi_head_attention = MultiHeadAttention(query_size=hidden_size, key_size=hidden_size,
-                                                                   value_size=hidden_size, num_hidden=out_size,
-                                                                   num_heads=heads, dropout=0.5, bias=False)
+                                                                   value_size=hidden_size, num_hidden=hidden_size,
+                                                                   num_heads=heads, dropout=0.2, bias=False)
             # self.multi_head_attention = nn.MultiheadAttention(embed_dim=out_size, kdim=hidden_size, vdim=hidden_size,
             #                                                   batch_first=True, dropout=0.5, num_heads=heads,
             #                                                   bias=False)
-        if hidden_size != out_size:
-            self.fc = nn.Linear(hidden_size, out_size)
-        else:
-            self.fc = None
-        self.bn = nn.BatchNorm1d(out_size)
+        self.w_o = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.bn1 = nn.BatchNorm1d(hidden_size)
+        self.bn2 = nn.BatchNorm1d(hidden_size)
         # self.ln = nn.LayerNorm(hidden_size)
         # self.bn_mid = nn.BatchNorm1d(hidden_size)
         self.dropout_1 = nn.Dropout(p=dropout)
@@ -361,37 +329,40 @@ class TemporalModel(nn.Module):
         self.dropout_3 = nn.Dropout(p=dropout)
         self.need_diff = diff
 
-    def forward(self, x1, x2=None, x3=None, data_lens=None, mask=None, **kwargs):
+    def forward(self, x1=None, x2=None, x3=None, data_lens=None, mask=None, **kwargs):
         if self.need_diff and data_lens is not None:
             data_lens = data_lens - 1
 
         # x1 = self.dropout_1(x1)
-        output, final_state = lstm_func(self.lstm_1, x1, data_lens)
-
-        if x2 is not None:
+        if x1 is not None:
+            output, final_state = lstm_func(self.lstm_1, x1, data_lens)
+        else:
             # x2 = self.dropout_2(x2)
             # x3 = self.dropout_2(x3)
             # ra = custom_dropout(ra, 0.5, self.training)
             output_2, final_state_2 = lstm_func(self.lstm_2, x2, data_lens)
             output_3, final_state_3 = lstm_func(self.lstm_3, x3, data_lens)
-            output = torch.cat((output, output_2, output_3), dim=-1)
-            final_state = torch.cat((final_state, final_state_2, final_state_3), dim=-1)
+            output = torch.cat((output_2, output_3), dim=-1)
+            final_state = torch.cat((final_state_2, final_state_3), dim=-1)
         final_state = final_state[:, None, :]
-        if self.fc is not None:
-            final_state = self.fc(final_state)
+
         if self.need_attention:
             # if data_lens is not None:
             #     mask = torch.arange((x1.size(-2)), dtype=torch.float32, device=x1.device)
             #     mask = mask[None, :] >= data_lens[:, None]
             # x1 = final_state + self.multi_head_attention(final_state, output, output, key_padding_mask=mask,
             #                                              need_weights=False)[0]
-            x1 = final_state + self.multi_head_attention(final_state, output, output, data_lens)
+            x1 = self.multi_head_attention(final_state, output, output, data_lens)
+            x1 = final_state + x1
         else:
             x1 = final_state
 
+        # x1 = self.dropout_1(x1)
         x1 = x1.view(len(x1), -1)
-
-        x1 = self.bn(x1)
+        # x1 = self.bn1(x1)
+        x1 = F.relu(x1)
+        x1 = self.w_o(x1)
+        x1 = self.bn2(x1)
         x1 = F.hardswish(x1)
 
         return x1
@@ -452,33 +423,31 @@ class GlobalConv(nn.Module):
 
 class RAIRadarGestureClassifier(nn.Module):
     def __init__(self, cfar=True, track=True, ra_conv=True, diff=True, attention=True, heads=4, in_size=(32, 32),
-                 hidden_size=(128, 64), in_channel=1,
+                 in_channel=1,conv2d_feat_size = 64,
                  out_size=7, cfar_expand_channels=8, cfar_in_channel=1, dropout=0.5,
                  track_channels=(4, 8, 16), ra_feat_size=32, track_out_size=64, spatial_channels=(8, 16, 32)):
         super(RAIRadarGestureClassifier, self).__init__()
 
         self.need_track = track
         self.need_ra_conv = ra_conv
-        self.hidden_size = hidden_size
         self.ra_feat_size = ra_feat_size
         self.sn = SpatialModel(ra_conv=ra_conv, in_size=in_size, num_channels=spatial_channels, diff=diff,
-                               out_size=hidden_size[0], ra_feat_size=ra_feat_size, in_channels=in_channel)
+                               conv2d_feat_size=conv2d_feat_size, ra_feat_size=ra_feat_size, in_channels=in_channel)
         fc_feat_size = 0
         if track:
             self.tn = GlobalConv(in_channels=in_channel, num_channels=track_channels, in_size=in_size,
                                  out_size=track_out_size)
             fc_feat_size = fc_feat_size + track_out_size
 
-        feat_size = hidden_size[0] - 2 * ra_feat_size
         if ra_conv:
-            self.temporal_net = TemporalModel(feat_size1=feat_size, out_size=hidden_size[1], attention=attention,
+            self.temporal_net = TemporalModel(feat_size1=conv2d_feat_size, attention=attention, conv_2d=False,
                                               ra_conv=ra_conv, heads=heads, diff=diff,
                                               feat_size2=ra_feat_size)
-            fc_feat_size = fc_feat_size + hidden_size[1]
+            fc_feat_size = fc_feat_size + ra_feat_size * 2
         else:
-            self.temporal_net = TemporalModel(feat_size1=feat_size, out_size=feat_size, attention=attention, diff=diff,
-                                              ra_conv=ra_conv)
-            fc_feat_size = fc_feat_size + feat_size
+            self.temporal_net = TemporalModel(feat_size1=conv2d_feat_size, attention=attention, diff=diff,
+                                              ra_conv=ra_conv, conv_2d=True)
+            fc_feat_size = fc_feat_size + conv2d_feat_size
         self.fc_2 = nn.Linear(fc_feat_size, out_size)
         self.dropout_1 = nn.Dropout(p=dropout)
 

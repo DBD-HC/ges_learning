@@ -25,6 +25,7 @@ class LogHelper:
         self.loger = logger
 
     def log(self, message):
+        print(message)
         self.loger.info(message)
 
 # 示例：往日志中写入一条消息

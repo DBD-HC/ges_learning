@@ -1,52 +1,48 @@
-from data.air_writing_dataset import *
-from model.network import *
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.metrics import confusion_matrix
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+
+
+def down_sample(frames, target_data_len):
+    data_len = len(frames)
+    n_delete_frame = data_len - target_data_len
+    gap = data_len / n_delete_frame
+    temp = 0
+    target_frames = torch.empty((target_data_len + 1, frames.size(-2), frames.size(-1)))
+    i = 0
+    for frame in frames:
+        temp += 1
+        if temp < gap:
+            target_frames[i] = frame
+            i += 1
+        else:
+            temp -= gap
+    return target_frames[:target_data_len]
+
+def up_sample(frames, target_data_len):
+    data_len = len(frames)
+    n_insert_frame = target_data_len - data_len
+    gap = data_len / n_insert_frame
+    temp = 0
+    target_frames = torch.empty((target_data_len + 1, frames.size(-2), frames.size(-1)))
+    i = 0
+    for frame in frames:
+        temp += 1
+        if temp < gap:
+            target_frames[i] = frame
+            i += 1
+        else:
+            temp -= gap
+    return target_frames[:target_data_len]
 
 if __name__ == '__main__':
+    # 创建一个示例序列（这里用随机数据代替）
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    train_set, validation_set, test_set = split_dataset()
-    batch_size = 32
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=8,
-                                              pin_memory=True)
+    sequence = torch.rand(size=(2, 4, 4)).unsqueeze(0).unsqueeze(0)
+    print(sequence)
+    output_tensor = torch.nn.functional.interpolate(sequence, size=(3, 4, 4), mode='trilinear', align_corners=False)
+    # 对第一个维度进行降采样
+    # downsampled_sequence = down_sample(sequence, 40)
+    print(output_tensor)
 
-    net = RDT_3DCNN_air_writing()
-
-    net.load_state_dict(torch.load('test.pth')['model_state_dict'])
-    net.to(device)
-
-    net.eval()
-    criterion = nn.CrossEntropyLoss()
-
-    print("===========Test model===========")
-    test_loss = 0
-    val_all_sample = 0.0
-    val_correct_sample = 0.0
-    ture_label = []
-    predict_label = []
-    with torch.no_grad():
-        for i, (data, label) in enumerate(test_loader):
-            ture_label.extend([x.item() for x in label])
-            data = data.to(device)
-            label = label.to(device)
-            output = net(data)
-            loss = criterion(output, label)
-            test_loss += loss.item() * len(label)
-            val_all_sample = val_all_sample + len(label)
-            prediction = torch.argmax(output, 1)
-            predict_label.extend([x.item() for x in prediction])
-            val_correct_sample += (prediction == label).sum().float().item()
-    val_acc = val_correct_sample / val_all_sample
-    val_loss = test_loss / val_all_sample
-    print('all test: %.5f, correct test samples: %.5f, val loss: %.5f, accuracy: %.5f' % (
-        val_all_sample, val_correct_sample, val_loss, val_acc))
-    cm = confusion_matrix(ture_label, predict_label)
-    # 绘制热图
-    sns.heatmap(cm, annot=True, cmap='Blues', fmt='g')
-    plt.xlabel('Predicted labels')
-    plt.ylabel('True labels')
-    plt.savefig('confusion_matrix.png')
-    plt.show()

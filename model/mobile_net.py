@@ -88,7 +88,7 @@ class Conv2dBnRelu(nn.Module):
         super(Conv2dBnRelu, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_channel, out_channel, dilation=dilation,
-                       kernel_size=kernel_size, padding=padding, stride=stride, bias=bias, groups=group)
+                      kernel_size=kernel_size, padding=padding, stride=stride, bias=bias, groups=group)
         )
         if bn:
             self.conv.append(nn.BatchNorm2d(out_channel))
@@ -99,37 +99,48 @@ class Conv2dBnRelu(nn.Module):
         x = self.conv(x)
         return x
 
+
 class DeepWiseConv1d(nn.Module):
     def __init__(self, in_channel, out_channel, expand_ratio=1, kernel_size=3, stride=1):
         super(DeepWiseConv1d, self).__init__()
         self.conv = nn.Sequential(
-            )
-        hidden_channel = in_channel*expand_ratio
+        )
+        hidden_channel = in_channel * expand_ratio
         if expand_ratio != 1:
-            self.conv.append(Conv1dBnRelu(in_channel, hidden_channel, kernel_size=1, bias=False, active=True, bn=True, padding=0))
+            self.conv.append(
+                Conv1dBnRelu(in_channel, hidden_channel, kernel_size=1, bias=False, active=True, bn=True, padding=0))
         self.conv.append(
-            Conv1dBnRelu(hidden_channel, hidden_channel, group=hidden_channel, kernel_size=kernel_size, bias=False, stride=stride, active=True, bn=True, padding=1))
-        self.conv.append(Conv1dBnRelu(hidden_channel, out_channel, kernel_size=1, bias=False, active=expand_ratio<=1, bn=True, padding=0))
+            Conv1dBnRelu(hidden_channel, hidden_channel, group=hidden_channel, kernel_size=kernel_size, bias=False,
+                         stride=stride, active=True, bn=True, padding=1))
+        self.conv.append(
+            Conv1dBnRelu(hidden_channel, out_channel, kernel_size=1, bias=False, active=expand_ratio <= 1, bn=True,
+                         padding=0))
 
     def forward(self, x):
         x = self.conv(x)
         return x
+
 
 class DeepWiseConv2d(nn.Module):
     def __init__(self, in_channel, out_channel, expand_ratio=1, kernel_size=3, stride=1):
         super(DeepWiseConv2d, self).__init__()
         self.conv = nn.Sequential(
-            )
-        hidden_channel = in_channel*expand_ratio
+        )
+        hidden_channel = in_channel * expand_ratio
         if expand_ratio != 1:
-            self.conv.append(Conv2dBnRelu(in_channel, hidden_channel, kernel_size=1, bias=False, active=True, bn=True, padding=0))
+            self.conv.append(
+                Conv2dBnRelu(in_channel, hidden_channel, kernel_size=1, bias=False, active=True, bn=True, padding=0))
         self.conv.append(
-            Conv2dBnRelu(hidden_channel, hidden_channel, group=hidden_channel, kernel_size=kernel_size, bias=False, stride=stride, active=True, bn=True, padding=1))
-        self.conv.append(Conv2dBnRelu(hidden_channel, out_channel, kernel_size=1, bias=False, active=expand_ratio<=1, bn=True, padding=0))
+            Conv2dBnRelu(hidden_channel, hidden_channel, group=hidden_channel, kernel_size=kernel_size, bias=False,
+                         stride=stride, active=True, bn=True, padding=1))
+        self.conv.append(
+            Conv2dBnRelu(hidden_channel, out_channel, kernel_size=1, bias=False, active=expand_ratio <= 1, bn=True,
+                         padding=0))
 
     def forward(self, x):
         x = self.conv(x)
         return x
+
 
 class Conv1dBnRelu(nn.Module):
     def __init__(self, in_channel, out_channel, kernel_size=3, stride=1, group=1, padding=1, dilation=1, bias=False,
@@ -137,7 +148,7 @@ class Conv1dBnRelu(nn.Module):
         super(Conv1dBnRelu, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv1d(in_channel, out_channel, dilation=dilation,
-                       kernel_size=kernel_size, padding=padding, stride=stride, bias=bias, groups=group)
+                      kernel_size=kernel_size, padding=padding, stride=stride, bias=bias, groups=group)
         )
         if bn:
             self.conv.append(nn.BatchNorm1d(out_channel))
@@ -258,7 +269,6 @@ class s_block(nn.Module):
         return x
 
 
-
 class AttSE1dBlock(nn.Module):
     def __init__(self, in_channel, radio=1.0):
         super(AttSE1dBlock, self).__init__()
@@ -301,62 +311,111 @@ class ResBlock(nn.Module):
         return x
 
 
+class BackModelConv(nn.Module):
+    def __init__(self, in_channel=32):
+        super(BackModelConv, self).__init__()
+
+        self.conv1 = Conv1dBnRelu(in_channel*2, 8, kernel_size=1, active=True, bias=False, bn=False, padding=0)
+        self.conv2 = Conv1dBnRelu(8, in_channel*2, kernel_size=1, active=False, bias=False, bn=False, padding=0)
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        return x
+
+
 class SingleDimConv2(nn.Module):
     def __init__(self, in_channel=32, channel_num=None, input_size=32, dropout=0.5):
         super(SingleDimConv2, self).__init__()
 
         self.conv1 = Conv1dBnRelu(in_channel, 8, active=True, bn=True)
-        self.conv2 = DeepWiseConv1d(8, 8, 2, stride=1)
-        #self.down = Conv1dBnRelu(8,8,kernel_size=1, padding=0, bn=False, stride=2)
-        self.conv3 = DeepWiseConv1d(8, 8, 1)
-        self.conv4 = DeepWiseConv1d(8, 8, 1)
+        self.conv2 = DeepWiseConv1d(8, 16, 1, stride=1)
+        # self.down = Conv1dBnRelu(8,8,kernel_size=1, padding=0, bn=False, stride=2)
+        self.conv3 = DeepWiseConv1d(16, 32, 1)
 
         self.mp = nn.MaxPool1d(2, ceil_mode=True)
         self.ap = nn.AvgPool1d(2, ceil_mode=True)
 
-    def forward(self, x, mask):
-        res = self.conv1(x)
-        x = self.conv2(res)
-        x = x + res
-        res = self.conv3(x)
-        x = res + x
-        #x = self.conv4(x)
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.mp(x)
+        x = self.conv2(x)
+        x = self.mp(x)
+        x = self.conv3(x)
+        x = self.mp(x)
         return x
 
 
 class SingleDimConv3(nn.Module):
     def __init__(self, in_channel=32, channel_num=None, input_size=32, dropout=0.5):
         super(SingleDimConv3, self).__init__()
+        # self.conv0 = Conv1dBnRelu(in_channel, 8, stride=1, kernel_size=3, bn=True, active=True, padding=1)
+        self.conv1 = Conv1dBnRelu(in_channel, 8, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
+        self.conv2 = Conv1dBnRelu(8, 16, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
+        self.conv3 = Conv1dBnRelu(16, 32, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
 
-        self.conv1 = Conv1dBnRelu(3, 8, stride=1, kernel_size=3, bn=True, active=True, padding=1)
-        self.conv2 = Conv1dBnRelu(8, 8, stride=1, kernel_size=3, bn=True, active=True, padding=1)
-        self.conv3 = Conv1dBnRelu(8, 8, stride=1, kernel_size=3, bn=True, active=True, padding=1)
+        # self.conv4 = Conv1dBnRelu(16, 16, stride=1, kernel_size=3, bn=False, bias=True, active=True, padding=1, group=2)
 
         # self.conv4 = Conv1dBnRelu(8, 16, stride=1, kernel_size=3, bn=True, active=True, padding=1)
         self.mp = nn.MaxPool1d(2, ceil_mode=True)
         self.ap = nn.AvgPool1d(2, ceil_mode=True)
+        self.dp = nn.Dropout(0.4)
 
-
-    def forward(self, x, mask):
-        res = self.conv1(x)
-        # x = self.mp(x)
-        x = self.conv2(res)
-        #x = self.mp(x)
+    def forward(self, x):
+        # res = self.conv0(x)
+        x = self.conv1(x)
+        x = self.mp(x)
+        x = self.conv2(x)
+        x = self.mp(x)
         x = self.conv3(x)
-        x = res + x
-        #x = self.mp(x)
-        #x = torch.relu(x)
-        # x = self.conv4(x, mask)
+        x = self.mp(x)
+
         return x
 
+
+class SingleDimConv4(nn.Module):
+    def __init__(self, in_channel=32, channel_num=None, input_size=32, dropout=0.5):
+        super(SingleDimConv4, self).__init__()
+        # self.conv0 = Conv1dBnRelu(in_channel, 8, stride=1, kernel_size=3, bn=True, active=True, padding=0)
+        self.conv1 = Conv1dBnRelu(in_channel, 16, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
+        self.conv2 = Conv1dBnRelu(16, 16, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
+        self.point0 = Conv1dBnRelu(in_channel, 16, stride=1, kernel_size=1, bn=False, active=True, bias=True, padding=0)
+
+        self.conv3 = Conv1dBnRelu(16, 16, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
+        self.conv4 = Conv1dBnRelu(16, 16, stride=1, kernel_size=3, bn=False, bias=True, active=True, padding=1)
+        # self.point1 = Conv1dBnRelu(16, 16, stride=2, kernel_size=1, bn=False, active=True, bias=True, padding=0)
+        # self.conv5 = Conv1dBnRelu(32, 64, stride=2, kernel_size=3, bn=False, bias=True, active=True, padding=1)
+        self.conv5 = Conv1dBnRelu(16, 32, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
+        self.conv6 = Conv1dBnRelu(32, 32, stride=1, kernel_size=3, bn=False, bias=True, active=True, padding=1)
+        self.point1 = Conv1dBnRelu(16, 32, stride=1, kernel_size=1, bn=False, active=True, bias=True, padding=0)
+        self.mp = nn.MaxPool1d(2, ceil_mode=True)
+        self.ap = nn.AvgPool1d(2, ceil_mode=True)
+        # self.dp = nn.Dropout(0.4)
+
+    def forward(self, x):
+        # res = self.conv0(x)
+        res = x
+        x = self.conv1(res)
+        x = self.conv2(x) + self.point0(res)
+        # x = self.dp(x)
+        res = self.mp(x)
+
+        x = self.conv3(res)
+        x = self.conv4(x) + res
+        # x = self.dp(x)
+        res = self.mp(x)
+        x = self.conv5(res)
+        x = self.conv6(x) + self.point1(res)
+        x = self.mp(x)
+
+        return x
 
 
 class CNN2d3Layers(nn.Module):
     def __init__(self, in_channel, channel_num):
         super(CNN2d3Layers, self).__init__()
-        self.conv1 = Conv2dBnRelu(in_channel, channel_num[0])
-        self.conv2 = Conv2dBnRelu(channel_num[0], channel_num[1])
-        self.conv3 = Conv2dBnRelu(channel_num[1], channel_num[2])
+        self.conv1 = Conv2dBnRelu(in_channel, channel_num[0], padding=0)
+        self.conv2 = Conv2dBnRelu(channel_num[0], channel_num[1], padding=0)
+        self.conv3 = Conv2dBnRelu(channel_num[1], channel_num[2], padding=0)
         self.mp = nn.MaxPool2d(kernel_size=2, ceil_mode=True)
         self.ap = nn.AvgPool2d(kernel_size=2, ceil_mode=True)
 
@@ -364,29 +423,32 @@ class CNN2d3Layers(nn.Module):
         x = self.conv1(x)
         x = self.mp(x)
         x = self.conv2(x)
-        x = self.ap(x)
+        x = self.mp(x)
         x = self.conv3(x)
-        x = self.ap(x)
+        x = self.mp(x)
         return x
 
 
-class CNN2d3Layers2(nn.Module):
+class CNN2d3LayersSeparable(nn.Module):
     def __init__(self, in_channel, channel_num):
-        super(CNN2d3Layers2, self).__init__()
-        self.conv1 = Conv2dBnRelu(in_channel, channel_num[0])
-        self.conv2 = DeepWiseConv2d(channel_num[0], channel_num[1], 1)
-        self.conv3 = DeepWiseConv2d(channel_num[1], channel_num[2], 1)
+        super(CNN2d3LayersSeparable, self).__init__()
+        self.conv = nn.Sequential(
+            *self.create_separable_CNN(in_channel, channel_num[0]),
+            nn.MaxPool2d(kernel_size=2, ceil_mode=True),
+            *self.create_separable_CNN(channel_num[0], channel_num[1]),
+            nn.MaxPool2d(kernel_size=2, ceil_mode=True),
+            *self.create_separable_CNN(channel_num[1], channel_num[2]),
+            nn.MaxPool2d(kernel_size=2, ceil_mode=True),
+        )
 
-        self.mp = nn.MaxPool2d(kernel_size=2, ceil_mode=True)
-        self.ap = nn.AvgPool2d(kernel_size=2, ceil_mode=True)
+    def create_separable_CNN(self, in_channel, out_channel):
+        cnnlayers = []
+        cnnlayers += [Conv2dBnRelu(in_channel, out_channel, kernel_size=(3, 1), padding=(1, 0))]
+        cnnlayers += [Conv2dBnRelu(out_channel, out_channel, kernel_size=(1, 3), padding=(0, 1))]
+        return cnnlayers
 
     def forward(self, x, mask):
-        x = self.conv1(x)
-        x = self.mp(x)
-        x = self.conv2(x)
-        x = self.ap(x)
-        x = self.conv3(x)
-        x = self.ap(x)
+        x = self.conv(x)
         return x
 
 
