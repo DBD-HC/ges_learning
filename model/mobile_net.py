@@ -419,7 +419,7 @@ class CNN2d3Layers(nn.Module):
         self.mp = nn.MaxPool2d(kernel_size=2, ceil_mode=True)
         self.ap = nn.AvgPool2d(kernel_size=2, ceil_mode=True)
 
-    def forward(self, x, mask=None):
+    def forward(self, x):
         x = self.conv1(x)
         x = self.mp(x)
         x = self.conv2(x)

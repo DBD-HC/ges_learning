@@ -31,7 +31,7 @@ def run_model(rdi, model=None):
 def get_data(act='y_Pull', env='e1', user='u4', pos='p1', sample=1):
     file_format = '{}_{}_{}_{}_s{}.npy'
     filename = file_format.format(act, env, user, pos, sample)
-    filename = root + '/' + filename
+    filename = rai_data_root + '/' + filename
     if os.path.exists(filename):
         file = np.load(filename)
         file = data_normalization(file)
@@ -45,11 +45,11 @@ def ges_classify():
 
 def visual_diff_hidden_feats(act='y_SlideLeft'):
     model = get_model()
-    # sn = model.sn
-    # sn.need_diff = False
-    # range_m = sn.range_att
-    # range_m.need_diff = False
-    # model = sn
+    sn = model.sn
+    sn.need_diff = False
+    range_m = sn.range_att
+    range_m.need_diff = False
+    model = sn
     position1_list = []
     position2_list = []
     feat1_list = None
@@ -61,9 +61,9 @@ def visual_diff_hidden_feats(act='y_SlideLeft'):
             while rdi is not None:
                 res = run_model(rdi, model)
                 print(res)
-                # pca_visualize(res[0], win=act+pos, clazz=pos, all_clazz=locations, title=act+pos)
-                # res = run_model(get_data(act=act, pos=pos), lambda rdi, data_len: range_m(torch.squeeze(rdi)[:, None, :],
-                #                                                                               rdi.size(0), rdi.size(1)))
+                pca_visualize(res[0], win=act+pos, clazz=pos, all_clazz=locations, title=act+pos)
+                res = run_model(get_data(act=act, pos=pos), lambda rdi, data_len: range_m(torch.squeeze(rdi)[:, None, :],
+                                                                                              rdi.size(0), rdi.size(1)))
                 sn = model.sn
                 sn_diff = sn.diff
                 feat1 = torch.squeeze(sn_diff.featmap1).detach().cpu().numpy()

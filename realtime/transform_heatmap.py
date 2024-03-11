@@ -7,7 +7,7 @@ import numpy as np
 
 rai_data_path = '/root/autodl-tmp/dataset/mmWave_cross_domain_gesture_dataset'
 heatmap_data_path = '/root/autodl-tmp/dataset/mmwave_2d_map/'
-filenames = os.listdir(root)
+filenames = os.listdir(rai_data_root)
 
 
 def unify_sequence(x, data_len):

@@ -2,7 +2,8 @@ import torch
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence
 import torch.nn.functional as F
-
+import torchvision.models as models
+import torchvision.transforms as transforms
 from utils import get_after_conv_size
 
 
@@ -121,7 +122,7 @@ class TinyRadarNN(torch.nn.Module):
 
 
 class DiGesture(nn.Module):
-    def __init__(self, input_size=(32, 32), channel_num=(8, 16, 32), spatial_feat_size=128, hidden_size=128):
+    def __init__(self, input_size=(32, 32), channel_num=(8, 16, 32), spatial_feat_size=128, hidden_size=128, out_size =7):
         super(DiGesture, self).__init__()
         self.conv1 = nn.Conv2d(1, channel_num[0], 3, bias=False, stride=2)
         self.bn1 = nn.BatchNorm2d(channel_num[0])
@@ -138,7 +139,7 @@ class DiGesture(nn.Module):
                        * get_after_conv_size(size=input_size[1], kernel_size=3, layer=3, reduction=2)
         self.fc_2 = nn.Linear(linear_input, spatial_feat_size)
         self.dropout = nn.Dropout(p=0.5)
-        self.fc_3 = nn.Linear(hidden_size, 7)
+        self.fc_3 = nn.Linear(hidden_size, out_size)
         # self.flatten = nn.Flatten
         self.softmax = nn.Softmax(dim=1)
 
@@ -367,20 +368,21 @@ class MSCNN(nn.Module):
 
 
 class DeepSolid(nn.Module):
-    def __init__(self, feat_size=(224, 224), out_size=7):
+    def __init__(self, feat_size=(32, 32), out_size=6):
         super(DeepSolid, self).__init__()
         self.conv1 = nn.Conv2d(1, 32, 3)
-        self.lrn1 = nn.LocalResponseNorm(size=32)
+        self.lrn1 = nn.LocalResponseNorm(size=3)
         self.conv2 = nn.Conv2d(32, 64, 3)
-        self.lrn2 = nn.LocalResponseNorm(size=32)
+        self.lrn2 = nn.LocalResponseNorm(size=3)
         self.conv3 = nn.Conv2d(64, 128, 3)
-        self.lrn3 = nn.LocalResponseNorm(size=32)
-        self.dp_0 = nn.Dropout(0.4)
+        self.lrn3 = nn.LocalResponseNorm(size=3)
+
         linear_in = get_after_conv_size(size=feat_size[0], kernel_size=3, padding=0, layer=3)
         linear_in = 128 * linear_in * linear_in
         self.fc_1 = nn.Linear(linear_in, 512)
         self.fc_2 = nn.Linear(512, 512)
         self.lstm1 = nn.LSTM(hidden_size=512, input_size=512, batch_first=True, num_layers=1)
+        self.dp_0 = nn.Dropout(0.4)
         self.dp_1 = nn.Dropout(0.5)
         self.fc_3 = nn.Linear(512, out_size)
 
@@ -411,6 +413,56 @@ class DeepSolid(nn.Module):
         x = self.dp_1(x)
         x = self.fc_3(x)
         x = torch.mean(x, dim=1)
+        return x
+
+
+class Resnet50Classifier(nn.Module):
+    def __init__(self, in_channels=2, out_size=6):
+        super(Resnet50Classifier, self).__init__()
+        resnet50 = models.resnet50(pretrained=False)
+        # 获取 ResNet-50 的特征提取部分
+        resnet50_features = nn.Sequential(*list(resnet50.children())[:-1])
+
+        # 获取 ResNet-50 的特征维度
+        num_features_resnet50 = resnet50.fc.in_features
+        self.classifier = nn.Sequential(
+            nn.Conv2d(in_channels=in_channels, out_channels=3, kernel_size=1, bias=False),
+            nn.BatchNorm2d(3),
+            nn.ReLU(),
+            resnet50_features,
+            nn.Flatten(),
+            nn.Linear(num_features_resnet50, out_size)
+        )
+
+
+    def forward(self, x):
+        x = self.classifier(x)
+        return x
+
+class MobilenetV350Classifier(nn.Module):
+    def __init__(self, in_channels=2, out_size=6):
+        super(MobilenetV350Classifier, self).__init__()
+        mobilenet = models.mobilenet_v3_small(pretrained=False)
+
+        # 获取 MobileNetV2 的特征提取部分
+        mobilenet_features = mobilenet.features
+
+        # 获取 MobileNetV2 的特征维度
+        num_features = mobilenet_features[-1].out_channels
+
+        self.classifier = nn.Sequential(
+            nn.Conv2d(in_channels=in_channels, out_channels=3, kernel_size=1, bias=False),
+            nn.BatchNorm2d(3),
+            nn.ReLU(),
+            mobilenet_features,
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(num_features, out_size)
+        )
+
+
+    def forward(self, x):
+        x = self.classifier(x)
         return x
 
 

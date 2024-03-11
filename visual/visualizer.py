@@ -15,7 +15,7 @@ visdom = visdom.Visdom(env='visual', port=6006)
 
 filename = 'y_Push_e4_u9_p1_s1.npy'
 
-d = np.load(os.path.join(root, filename))
+d = np.load(os.path.join(rai_data_root, filename))
 
 d = torch.from_numpy(d)
 

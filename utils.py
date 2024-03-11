@@ -46,10 +46,13 @@ def random_geometric_features(datas):
 
 
 def data_normalization(d, *args):
-    mean = np.mean(d)
-    var = np.var(d)
-    d = (d - mean) / np.sqrt(var + 1e-9)
+    # mean = np.mean(d)
+    #     var = np.var(d)
+    #     d = (d - mean) / np.sqrt(var + 1e-9)
     # d = (d - np.min(d))/ (np.min(d) - d.max)
+    var = np.var(d)
+    mean = np.mean(d)
+    d = (d - mean) / np.sqrt(var + 1e-9)
     return d
 
 
@@ -233,5 +236,5 @@ def getModelSize(model):
         buffer_size += buffer.nelement() * buffer.element_size()
         buffer_sum += buffer.nelement()
     all_size = (param_size + buffer_size) / 1024 / 1024
-    print('模型总大小为：{:.3f}MB'.format(all_size))
+    print('模型总大小为：{:.2f}MB'.format(all_size))
     return (param_size, param_sum, buffer_size, buffer_sum, all_size)

@@ -9,34 +9,26 @@ from tqdm import tqdm
 import scipy.io
 import scipy.signal
 import visdom
+
+from data.data_splitter import DataSpliter
 from utils import *
 
 # import cupy as cp
 
-gestures = ['y_Clockwise', 'y_Counterclockwise', 'y_Pull', 'y_Push', 'y_SlideLeft', 'y_SlideRight']
-negative_samples = ['n_liftleft', 'n_liftright', 'n_sit', 'n_stand', 'n_turn', 'n_waving', 'n_walking']
-envs = ['e1', 'e2', 'e3', 'e4', 'e5', 'e6']
-participants = ['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7', 'u8', 'u9', 'u10', 'u11', 'u12', 'u13',
-                'u14', 'u15', 'u16', 'u17', 'u18', 'u19', 'u20', 'u21', 'u22', 'u23', 'u24', 'u25']
-locations = ['p1', 'p2', 'p3', 'p4', 'p5']
+
 
 # root = 'D:\\data\\mmWave_cross_domain_gesture_dataset'
 # root = '/root/autodl-nas/mmWave_cross_domain_gesture_dataset'
-root = '/root/autodl-tmp/dataset/mmWave_cross_domain_gesture_dataset'
+rai_data_root = '/root/autodl-tmp/dataset/mmWave_cross_domain_gesture_dataset'
+rdi_data_root = '/root/autodl-tmp/dataset/mmWave_cd_rdi/mmwave_rdi'
+# di_data_root = '/root/autodl-tmp/dataset/mmwave_di'
 # root = '/root/autodl-tmp/dataset/mmWave_cd_rdi/mmwave_rdi'
 # root = '/root/autodl-tmp/dataset/mmwave_rai_lessrx'
-#root = '/root/autodl-tmp/dataset/mmwave_rai_2rx'
+# root = '/root/autodl-tmp/dataset/mmwave_rai_2rx'
 
 st = {'e1': 0, 'e2': 0, 'e3': 0, 'e4': 0, 'e5': 0, 'e6': 0}
 st_act = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0}
 
-train_data_filenames = []
-train_label_list = []
-test_data_filenames = []
-test_label_list = []
-file_cache = {}
-
-filenames_set = set(os.listdir(root))
 print('========加载文件缓存========')
 
 # for fn in tqdm(filenames_set):
@@ -47,97 +39,10 @@ print('========文件缓存加载完毕========')
 
 
 # file_example n_liftleft_e1_u1_p1_s1.npy
-def check_and_get(prefix):
-    index = 1
-    prefix = prefix + '_s{:d}.npy'
-    file_name = prefix.format(index)
-    samples = []
-    while file_name in filenames_set:
-        samples.append(file_name)
-        index += 1
-        file_name = prefix.format(index)
-    return samples
 
 
-def assign_samples_k_fold(ges_type, samples):
-    if len(samples) <= 0:
-        return
-    random.shuffle(samples)
-    size = len(samples) // 5
-    chunks = [samples[i:i + size] for i in range(0, len(samples), size)]
-    for i, value in enumerate(chunks):
-        st_act[ges_type] += len(value)
-        train_data_filenames[i].extend(value)
-        train_label_list[i].extend([ges_type] * size)
-
-
-def get_samples(file_format, act_type, act, env, participant):
-    prefix = file_format.format(act=act, env=env, user=participant)
-    samples = []
-    sample_labels = []
-    if act == 'n_walking':
-        sub_samples = check_and_get(prefix)
-        samples.extend(sub_samples)
-        sample_labels.extend([act_type] * len(sub_samples))
-    else:
-        for p in locations:
-            sub_samples = check_and_get(prefix + '_' + p)
-            samples.extend(sub_samples)
-            sample_labels.extend([act_type] * len(sub_samples))
-    return samples, sample_labels
-
-
-angle_scale_map = {
-    0: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
-        30, 31],
-    1: [0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
-        30],
-    2: [0, 0, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-        30],
-    3: [0, 0, 0, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-        29],
-    4: [0, 0, 0, 1, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27,
-        29],
-    5: [0, 0, 0, 0, 1, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26,
-        29],
-    6: [0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 28],
-    7: [0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 25, 28],
-    8: [0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 25, 28],
-    9: [0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 23, 27],
-    10: [0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 23, 27],
-    11: [0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 23, 27],
-    12: [0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 23, 27],
-    13: [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 19, 22, 27],
-    14: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 18, 21, 26],
-    15: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 17, 21, 26],
-    16: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 12, 14, 17, 21, 26],
-    17: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 6, 7, 8, 9, 11, 14, 17, 21, 26],
-    18: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 5, 5, 6, 7, 8, 10, 13, 17, 21, 26],
-    19: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 5, 5, 6, 7, 9, 12, 16, 21, 26],
-    20: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 5, 5, 6, 8, 11, 15, 20, 26],
-}
-
-# 距离平移范围
-angle_range = {
-    locations[0]: np.arange(-10, 11),
-    locations[1]: np.arange(-10, 11),
-    locations[2]: np.arange(-10, 11),
-    locations[3]: np.arange(-4, 17),
-    locations[4]: np.arange(-16, 5),
-    'p6': np.arange(-10, 11),
-}
-
-distance_range = {
-    locations[0]: np.arange(-4, 16),
-    locations[1]: np.arange(-8, 9),
-    locations[2]: np.arange(-15, 5),
-    locations[3]: np.arange(-8, 9),
-    locations[4]: np.arange(-8, 9),
-    'p6': np.arange(-8, 9),
-}
-
-static_angle_range = [np.arange(-20, 21), np.arange(-6, 7)]
-static_distance_range = [np.arange(-6, 7), np.arange(-20, 21)]
+static_angle_range = [np.arange(-6, 7), np.arange(-6, 7)]
+static_distance_range = [np.arange(-6, 7), np.arange(-6, 7)]
 
 
 def random_translation(datas, position, p=0.5):
@@ -153,21 +58,6 @@ def random_translation(datas, position, p=0.5):
 
 
 def random_scale_radiated_power(datas, position, distance, angle, p=0.5):
-    #  if position < locations[3]:
-    #         if abs(angle) > 10:
-    #             scale_factor = random.uniform(0.2, 0.8)
-    #         else:
-    #             scale_factor = random.uniform(0.4, 1.2)
-    #     elif position == locations[3]:
-    #         if angle < 0:
-    #             scale_factor = random.uniform(1, 1.2)
-    #         else:
-    #             scale_factor = random.uniform(0.8, 1)
-    #     else:
-    #         if angle > 0:
-    #             scale_factor = random.uniform(1, 1.2)
-    #         else:
-    #             scale_factor = random.uniform(0.8, 1)
     scale_factor = random.uniform(0.8, 1.2)
     datas = scale_factor * data_normalization(datas)
     return datas
@@ -204,61 +94,171 @@ def data_augmentation(d, label, position):
     d = random_geometric_features(d)
     d, label = random_reverse(d, label)
     d = random_data_len_adjust_2(d)
-    d = random_scale_radiated_power(d, position, dis, angle)
+    # d = random_scale_radiated_power(d, position, dis, angle)
+    d = data_normalization(d)
     # d = cfar(d)
     return d, label
 
 
-def get_track_binary(datas):
-    # 获取轨迹
-    shape = datas.shape
-    datas = datas.reshape(-1, shape[-1] * shape[-2])
-    max_indexes = np.argmax(datas, axis=1)
-    # max_indexes = np.where(datas - 0.99 * np.max(datas, axis=1)[:, None] > 0)
-    x, y = max_indexes // shape[-1], max_indexes % shape[-1]
-    # x, y = max_indexes[1] // shape[-1], max_indexes[1] % shape[-1]
-    track = np.zeros((shape[-2], shape[-1]))
-    track[x, y] = 255
-    # shape = datas.shape
-    # track = np.sum(datas, axis=0)
-    track = data_normalization(track)
-    return track
+pre_domain = [0]
 
 
-def get_track(datas):
-    # d_range = datas.sum(axis=2)
-    # x = np.argmax(d_range, axis=1)
-    track = np.zeros((3, datas.shape[-2], datas.shape[-1]))
-    # for i, frame in enumerate(datas):
-    #    y = np.argmax(frame[x[i]])
-    #    track[0, x[i], y] = frame[x[i], y]
-    # track[0] = np.max(datas,axis=0)
-    # track[1] = np.mean(datas, axis=0)
-    # track[2] = np.std(datas, axis=0)
-    # track[0] = data_normalization(track[0])
-    return track
 
 
-def combine(index):
-    return di_gesture_dataset(sum([x for i, x in enumerate(train_data_filenames) if i != index], []),
-                              sum([x for i, x in enumerate(train_label_list) if i != index], []), data_augmentation), \
-           di_gesture_dataset(train_data_filenames[index], train_label_list[index], data_normalization)
+class DIDataSplitter(DataSpliter):
+    def __init__(self, data_path = rai_data_root):
 
+        self.gestures = ['y_Clockwise', 'y_Counterclockwise', 'y_Pull', 'y_Push', 'y_SlideLeft', 'y_SlideRight']
+        self.negative_samples = ['n_liftleft', 'n_liftright', 'n_sit', 'n_stand', 'n_turn', 'n_waving', 'n_walking']
+        self.acts = self.gestures + self.negative_samples
+        self.envs = ['e1', 'e2', 'e3', 'e4', 'e5', 'e6']
+        self.participants = ['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7', 'u8', 'u9', 'u10', 'u11', 'u12', 'u13',
+                        'u14', 'u15', 'u16', 'u17', 'u18', 'u19', 'u20', 'u21', 'u22', 'u23', 'u24', 'u25']
+        self.locations = ['p1', 'p2', 'p3', 'p4', 'p5']
 
-pre_domain = ['sos']
+        super(DIDataSplitter, self).__init__(data_path=data_path, domain_num=(5, 5, len(self.envs), len(self.locations)))
+        self.file_format = '{act}_{env}_{user}_{loc}_s{s}.npy'
+        self.file_format_walking = '{act}_{env}_{user}_s{s}.npy'
+        self.pre_domain = -1
 
+    def get_domain_num(self, domain):
+        return self.domain_num[domain]
 
-def clear_cache():
-    train_data_filenames.clear()
-    train_label_list.clear()
-    test_data_filenames.clear()
-    test_label_list.clear()
+    def clear_cache(self):
+        self.train_data_filenames.clear()
+        self.train_label_list.clear()
+        self.test_data_filenames.clear()
+        self.test_label_list.clear()
 
+    def combine(self, index):
+        return di_gesture_dataset(sum([x for i, x in enumerate(self.train_data_filenames) if i != index], []),
+                                  sum([x for i, x in enumerate(self.train_label_list) if i != index], []),
+                                  data_augmentation), \
+               di_gesture_dataset(self.train_data_filenames[index], self.train_label_list[index], data_normalization)
 
+    def assign_k_fold(self, samples, sample_labels, fold):
+        s_len = len(samples)
+        if s_len <= 0:
+            return
+        sample_label_zip = list(zip(samples, sample_labels))
+        random.shuffle(sample_label_zip)
+        samples, sample_labels = zip(*sample_label_zip)
+        size = s_len // fold
+        j = 0
+        for i in range(0, s_len, size):
+            if j == len(self.train_data_filenames) - 1:
+                self.train_data_filenames[j].extend(samples[i:])
+                self.train_label_list[j].extend(sample_labels[i:])
+                break
+            else:
+                self.train_data_filenames[j].extend(samples[i:i + size])
+                self.train_label_list[j].extend(sample_labels[i:i + size])
+            j += 1
+
+    def check_and_get(self, file_name_prefix, sample_label):
+        sample_index = 1
+        file_name = file_name_prefix.format(sample_index)
+        samples = []
+        sample_labels = []
+        while file_name in self.filenames_set:
+            samples.append(file_name)
+            sample_labels.append(sample_label)
+            sample_index += 1
+            file_name = file_name_prefix.format(sample_index)
+        return samples, sample_labels
+
+    def get_samples(self, act, act_i, env, user):
+        # {act}_{env}_{user}_{loc}_s{s}.npy
+        if act == self.negative_samples[-1]:
+            file_name_prefix = self.file_format_walking.format(act=act, env=env, user=user, s='{}')
+            samples, sample_labels = self.check_and_get(file_name_prefix, act_i)
+        else:
+            samples = []
+            sample_labels = []
+            for loc_i, loc in enumerate(self.locations):
+                file_name_prefix = self.file_format.format(act=act, env=env, user=user, loc=loc, s='{}')
+                temp_samples, temp_sample_labels = self.check_and_get(file_name_prefix, act_i)
+                samples.extend(temp_samples)
+                sample_labels.extend(temp_sample_labels)
+        return samples, sample_labels
+
+    def split_data(self, domain, index=None):
+        if self.pre_domain != domain:
+            self.clear_cache()
+            self.pre_domain = domain
+
+        # in_domain
+        if domain == 0:
+            if len(self.train_data_filenames) == 0:
+                self.train_data_filenames.extend([[], [], [], [], []])
+                self.train_label_list.extend([[], [], [], [], []])
+                for i, act in enumerate(self.acts):
+                    for e in self.envs:
+                        for u in self.participants:
+                            if act == self.negative_samples[-1]:
+                                file_name_prefix = self.file_format_walking.format(act=act, env=e, user=u, s='{}')
+                                samples, sample_labels = self.check_and_get(file_name_prefix, i)
+                                self.assign_k_fold(samples, sample_labels, self.domain_num[domain])
+                            else:
+                                for p in self.locations:
+                                    file_name_prefix = self.file_format.format(act=act, env=e, user=u, loc=p, s='{}')
+                                    samples, sample_labels = self.check_and_get(file_name_prefix, i)
+                                    self.assign_k_fold(samples, sample_labels, self.domain_num[domain])
+            tr, te = self.combine(index)
+            print('ges and num {}'.format(st_act))
+            return tr, te
+        # cross_person
+        elif domain == 1:
+            if len(self.train_data_filenames) == 0:
+                for i, act in enumerate(self.acts):
+                    for e in self.envs:
+                        for u_i, u in enumerate(self.participants):
+                            samples, labels = self.get_samples(act=act, act_i=i, env=e, user=u)
+                            if u_i < 3:
+                                self.train_data_filenames.extend(samples)
+                                self.train_label_list.extend(labels)
+                            else:
+                                self.test_data_filenames.extend(samples)
+                                self.test_label_list.extend(labels)
+            return di_gesture_dataset(self.train_data_filenames, self.train_label_list, data_augmentation), \
+                   di_gesture_dataset(self.test_data_filenames, self.test_label_list, data_normalization)
+        # cross_environment
+        elif domain == 2:
+            if len(self.train_data_filenames) == 0:
+                self.train_data_filenames.extend([[], [], [], [], [], []])
+                self.train_label_list.extend([[], [], [], [], [], []])
+                for act_i, act in enumerate(itertools.chain(self.gestures, self.negative_samples)):
+                    for u in self.participants:
+                        for e_i, e in enumerate(self.envs):
+                            samples, labels = self.get_samples(act, act_i, e, u)
+                            self.train_data_filenames[e_i].extend(samples)
+                            self.train_label_list[e_i].extend(labels)
+            return self.combine(index)
+        # cross location
+        else:
+            if len(self.train_data_filenames) == 0:
+                self.train_data_filenames.extend([[], [], [], [], []])
+                self.train_label_list.extend([[], [], [], [], []])
+                for i, act in enumerate(self.acts):
+                    if act == self.negative_samples[-1]:
+                        continue
+                    for e in self.envs:
+                        for u in self.participants:
+                            for p_i, p in enumerate(self.locations):
+                                file_name_prefix = self.file_format.format(act=act, env=e, user=u, loc=p, s='{}')
+                                samples, labels = self.check_and_get(file_name_prefix, i)
+                                self.train_data_filenames[p_i].extend(samples)
+                                self.train_label_list[p_i].extend(labels)
+            return self.combine(index)
+
+'''
 def split_data(domain, fold=0, env_index=0, position_index=0, person_index=7):
     file_format = '{act}_{env}_{user}'
-
-    if domain == 'in_domain':
+    if pre_domain[0] != domain:
+        clear_cache()
+        pre_domain[0] = domain
+    # in_domain
+    if domain == 0:
         if len(train_data_filenames) == 0:
             train_data_filenames.extend([[], [], [], [], []])
             train_label_list.extend([[], [], [], [], []])
@@ -276,7 +276,8 @@ def split_data(domain, fold=0, env_index=0, position_index=0, person_index=7):
         tr, te = combine(fold)
         print('ges and num {}'.format(st_act))
         return tr, te
-    elif domain == 'cross_person':
+    # cross_person
+    elif domain == 1:
         if len(train_data_filenames) == 0:
             for i, act in enumerate(itertools.chain(gestures, negative_samples)):
                 for e in envs:
@@ -290,7 +291,8 @@ def split_data(domain, fold=0, env_index=0, position_index=0, person_index=7):
                         test_label_list.extend(labels)
         return di_gesture_dataset(train_data_filenames, train_label_list, data_augmentation), \
                di_gesture_dataset(test_data_filenames, test_label_list, data_normalization)
-    elif domain == 'cross_environment':
+    # cross_environment
+    elif domain == 2:
         if len(train_data_filenames) == 0:
             train_data_filenames.extend([[], [], [], [], [], []])
             train_label_list.extend([[], [], [], [], [], []])
@@ -301,6 +303,7 @@ def split_data(domain, fold=0, env_index=0, position_index=0, person_index=7):
                         train_data_filenames[index].extend(samples)
                         train_label_list[index].extend(labels)
         return combine(env_index)
+    # cross location
     else:
         if len(train_data_filenames) == 0:
             train_data_filenames.extend([[], [], [], [], []])
@@ -317,72 +320,25 @@ def split_data(domain, fold=0, env_index=0, position_index=0, person_index=7):
                             train_data_filenames[index].extend(samples)
                             train_label_list[index].extend([i] * len(samples))
         return combine(position_index)
+'''
 
 
-def get_domain_reduction_samples(template, train_domain, test_domain, act_index, act, u=None, e=None, p=None):
-    s = 1
-    if p is not None:
-        template = template.format(act='{act}', env='{env}', user='{user}', pos=p, sample='{sample}')
-    file_name = template.format(act=act, env=e, user=u, sample=str(s))
-    while file_name in filenames_set:
-        if u in train_domain or e in train_domain or p in train_domain:
-            train_data_filenames.append(file_name)
-            train_label_list.append(act_index)
-        elif test_domain is None or u in test_domain or e in test_domain or p in test_domain:
-            test_data_filenames.append(file_name)
-            test_label_list.append(act_index)
-        s = 1 + s
-        file_name = template.format(act=act, env=e, user=u, sample=str(s))
 
+def get_track(rai):
+    rai_max = np.max(rai, axis=0)
+    rai_mean = np.mean(rai, axis=0)
+    rai_std = np.std(rai, axis=0)
+    global_track = np.concatenate((rai_max[None, :], rai_mean[None, :], rai_std[None, :]), axis=0)
+    return global_track
 
-def domain_reduction_split(train_domain, test_domain, augmentation=False):
-    clear_cache()
-    file_format = '{act}_{env}_{user}_{pos}_s{sample}.npy'
-    file_format_walking = '{act}_{env}_{user}_s{sample}.npy'
-    for i, act in enumerate(itertools.chain(gestures, negative_samples)):
-        for u in participants:
-            for e in envs:
-                if act == 'n_walking':
-                    get_domain_reduction_samples(file_format_walking, train_domain, test_domain, i, act, u, e)
-                for p in locations:
-                    get_domain_reduction_samples(file_format, train_domain, test_domain, i, act, u, e, p)
-
-    train_set = di_gesture_dataset(train_data_filenames, train_label_list, data_augmentation,
-                                   need_augmentation=augmentation)
-    test_set = di_gesture_dataset(test_data_filenames, test_label_list, data_normalization,
-                                  need_augmentation=augmentation)
-
-    return train_set, test_set
-
-
-def data_len_variation_split(train_data_len=(25, 35), augmentation=False):
-    clear_cache()
-    file_format = '{act}_{env}_{user}_{pos}_s{sample}.npy'
-    for i, act in enumerate(itertools.chain(gestures, negative_samples)):
-        for u in participants:
-            for e in envs:
-                for p in locations:
-                    s = 1
-                    file_name = file_format.format(act=act, env=e, user=u, pos=p, sample=str(s))
-                    while file_name in filenames_set:
-                        sample = np.load(os.path.join(root, file_name))
-                        if train_data_len[0] < len(sample) < train_data_len[1]:
-                            train_data_filenames.append(file_name)
-                            train_label_list.append(i)
-                        else:
-                            test_data_filenames.append(file_name)
-                            test_label_list.append(i)
-                        s = 1 + s
-                        file_name = file_format.format(act=act, env=e, user=u, pos=p, sample=str(s))
-    train_set = di_gesture_dataset(train_data_filenames, train_label_list, data_augmentation,
-                                   need_augmentation=augmentation)
-    test_set = di_gesture_dataset(test_data_filenames, test_label_list, data_normalization,
-                                  need_augmentation=augmentation)
-
-    return train_set, test_set
+def compress_rdi(d):
+    if d.ndim > 3:
+        d = np.sqrt(d[0::2] ** 2 + d[1::2] ** 2)
+        d = np.mean(d, axis=0)
+    return d,
 
 class di_gesture_dataset(Dataset):
-    def __init__(self, file_names, labels, transform=None, max_frames=128, need_augmentation=True, data_root=None):
+    def __init__(self, file_names, labels, transform=None, max_frames=128, need_augmentation=True, data_root=None, data_type=0):
         self.len = len(file_names)
         self.max_frame = max_frames
         self.file_names = np.array(file_names)
@@ -391,32 +347,28 @@ class di_gesture_dataset(Dataset):
         self.labels = np.where(self.labels < 6, labels, 6)
         if data_root is not None:
             self.data_root = data_root
+        elif data_type == 0:
+            self.data_root = rai_data_root
         else:
-            self.data_root = root
+            self.data_root = rdi_data_root
         if need_augmentation:
             self.transform = transform
         else:
             self.transform = data_normalization
-        self.positions = []
-        for i, name in enumerate(self.file_names):
-            inf = name.split('_')
-            if inf[4] in locations:
-                self.positions.append(inf[4])
-            else:
-                self.positions.append('p6')
 
     def __getitem__(self, index):
         d = np.load(os.path.join(self.data_root, self.file_names[index]))
+        # compress_rdi(d)
         # d = file_cache[self.file_names[index]]
         label = self.labels[index]
-        res = self.transform(d, self.labels[index], self.positions[index])
+        res = self.transform(d, self.labels[index], None)
         if isinstance(res, tuple):
             d = res[0]
             label = res[1]
         else:
             d = res
-        track = get_track(d)
-        return torch.from_numpy(d).type(torch.float32), torch.from_numpy(track).type(torch.float32), torch.tensor(
+
+        return torch.from_numpy(d).type(torch.float32), torch.from_numpy(get_track(d)).type(torch.float32) if d.ndim == 3 else None, torch.tensor(
             label), index
 
     def __len__(self):
@@ -435,7 +387,7 @@ def plot_data_len_stat():
         else:
             ges_type = inf[1]
         ges_index = ges_index_map[ges_type]
-        sample = np.load(os.path.join(root, file_name))
+        sample = np.load(os.path.join(rai_data_root, file_name))
         statis[len(sample), ges_index] += 1
     print(statis)
     visdom.bar(
@@ -448,13 +400,14 @@ def plot_data_len_stat():
         )
     )
 
+
 def plot_user_sample_stat():
     statis = np.zeros((25, 7))
     ges_index_map = {'Clockwise': 0, 'Counterclockwise': 1, 'Pull': 2, 'Push': 3, 'SlideLeft': 4, 'SlideRight': 5,
                      'NG': 6}
     for file_name in filenames_set:
         inf = file_name.split('_')
-        user_index=int(inf[3][1:])-1
+        user_index = int(inf[3][1:]) - 1
 
         sample_type = inf[0]
         if sample_type == 'n':
@@ -475,13 +428,14 @@ def plot_user_sample_stat():
         )
     )
 
+
 def plot_domain_stat_2():
     statis = np.zeros((6, 7))
     ges_index_map = {'Clockwise': 0, 'Counterclockwise': 1, 'Pull': 2, 'Push': 3, 'SlideLeft': 4, 'SlideRight': 5,
                      'NG': 6}
     for file_name in filenames_set:
         inf = file_name.split('_')
-        env_index=int(inf[2][1:])-1
+        env_index = int(inf[2][1:]) - 1
 
         sample_type = inf[0]
         if sample_type == 'n':
@@ -502,21 +456,24 @@ def plot_domain_stat_2():
         )
     )
 
+
 def check():
     rai = sorted(os.listdir('/root/autodl-tmp/dataset/mmWave_cross_domain_gesture_dataset'))
-    rdi = sorted(os.listdir('/root/autodl-tmp/dataset/mmWave_cd_rdi/mmwave_rdi'))
-    for i,v in enumerate(rai):
+    rdi = sorted(os.listdir('/root/autodl-tmp/dataset/mmwave_di'))
+    for i, v in enumerate(rai):
         if v != rdi[i]:
             print(v)
 
+
 def rename():
-    rd_path = '/root/autodl-tmp/dataset/mmWave_cd_rdi/mmwave_rdi'
+    rd_path = '/root/autodl-tmp/dataset/mmwave_di'
     file_format = 'n_walking_e6_u21_s{sample}.npy'
 
     for i in range(10):
-        origin = file_format.format(sample=61+i)
+        origin = file_format.format(sample=61 + i)
         new_name = file_format.format(sample=41 + i)
         os.rename(os.path.join(rd_path, origin), os.path.join(rd_path, new_name))
+
 
 if __name__ == '__main__':
     check()
