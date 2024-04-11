@@ -6,7 +6,7 @@ import visdom
 from data.mcd_dataset import MCDDataSplitter
 from log_helper import LogHelper
 from train import TIME_FREQUENCY_IMAGE, RANGE_ANGLE_IMAGE, new_cross_domain, SINGLE_RANGE_DOPPLER, \
-    CROPPED_RANGE_DOPPLER_IMAGER, COMPLEX_RANGE_DOPPLER, new_cube_k_fold
+    CROPPED_RANGE_DOPPLER_IMAGER, COMPLEX_RANGE_DOPPLER, new_cube_k_fold, train_for_real_time
 
 if __name__ == '__main__':
     loger = LogHelper()
@@ -18,11 +18,17 @@ if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     di_DataSplitter = MCDDataSplitter()
 
+    train_for_real_time(model_type=0)
+    train_for_real_time(model_type=1)
+    train_for_real_time(model_type=2)
+    new_cube_k_fold(augmentation=True, epoch=200, start_epoch=0, domain=0, data_type=RANGE_ANGLE_IMAGE, batch_size=128,
+                    model_type=2, train_manager=None, data_spliter=di_DataSplitter)
+    '''
     new_cube_k_fold(augmentation=True, epoch=200, start_epoch=0, domain=0, data_type=RANGE_ANGLE_IMAGE, batch_size=128,
                     model_type=0, train_manager=None, data_spliter=di_DataSplitter)
     new_cube_k_fold(augmentation=True, epoch=200, start_epoch=0, domain=0, data_type=RANGE_ANGLE_IMAGE, batch_size=128,
                     model_type=1, train_manager=None, data_spliter=di_DataSplitter)
-    '''
+
     new_cross_domain(augmentation=True, model_type=0, data_type=RANGE_ANGLE_IMAGE, domain=1,
                      train_index=[0, 1, 2, 3, 4],
                      test_index=[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],

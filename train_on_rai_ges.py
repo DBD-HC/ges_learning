@@ -18,6 +18,12 @@ if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     complex_DataSplitter = RAIGesDataSplitter()
 
+    new_cube_k_fold(augmentation=True, epoch=200, start_epoch=0, domain=0, data_type=RANGE_ANGLE_IMAGE, batch_size=128,
+                   model_type=0, train_manager=None, data_spliter=complex_DataSplitter)
+    new_cube_k_fold(augmentation=True, epoch=200, start_epoch=0, domain=0, data_type=TIME_FREQUENCY_IMAGE, batch_size=128,
+                   model_type=1, train_manager=None, data_spliter=complex_DataSplitter)
+
+ '''
     new_cross_domain(augmentation=True, model_type=0, data_type=RANGE_ANGLE_IMAGE, domain=3,
                      train_index=[0, 6, 7],
                      test_index=[1, 2, 3, 4, 5, 8, 9],
@@ -53,7 +59,7 @@ if __name__ == '__main__':
                      multistream=True, diff=True,
                      attention=False, epoch=200, data_spliter=complex_DataSplitter)
 
-    '''
+ 
     new_train_transferring(augmentation=True, domain=1, model_type=0, data_type=RANGE_ANGLE_IMAGE,
                            train_index=[0],
                            test_index=[1, 2, 3],
