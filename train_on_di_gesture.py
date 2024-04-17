@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torchmetrics
 
-from data.di_gesture_dataset import *
+from data.mcd_dataset import *
 import torch.optim as optim
 
 from log_helper import LogHelper

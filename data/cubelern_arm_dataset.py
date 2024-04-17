@@ -2,7 +2,7 @@ import os
 
 import torch
 from torch.utils.data import Dataset
-from data.di_gesture_dataset import random_translation, random_scale_radiated_power
+from data.mcd_dataset import random_translation
 import numpy as np
 
 from utils import random_geometric_features

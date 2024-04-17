@@ -175,7 +175,7 @@ class DiGesture(nn.Module):
 class FrameBlock1(nn.Module):
     def __init__(self, feat_size=(32, 32), in_channels=6):
         super(FrameBlock1, self).__init__()
-        self.avg_pool = nn.MaxPool2d(kernel_size=(2, 1), ceil_mode=True)
+        self.avg_pool = nn.AvgPool2d(kernel_size=(2, 1), ceil_mode=True)
         self.conv1 = nn.Conv1d(in_channels=in_channels, out_channels=in_channels, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm1d(in_channels)
         self.active1 = nn.ReLU()
@@ -365,6 +365,53 @@ class MSCNN(nn.Module):
         x = torch.cat((r, d, a), dim=-1)
         x = self.fc(x)
         return x
+
+class RFDual(nn.Module):
+    def __init__(self, feat_size=(32, 32), out_size=6):
+        super(RFDual, self).__init__()
+
+        linear_in = get_after_conv_size(size=feat_size[0], kernel_size=3, padding=1, layer=3, stride=2)
+        linear_in = 16 * linear_in * linear_in
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels=1, out_channels=4, kernel_size=3, padding=1),
+            nn.BatchNorm2d(4),
+            nn.ReLU(),
+            nn.MaxPool2d(2, ceil_mode=True),
+            nn.Conv2d(in_channels=4, out_channels=8, kernel_size=3, padding=1),
+            nn.BatchNorm2d(8),
+            nn.ReLU(),
+            nn.MaxPool2d(2, ceil_mode=True),
+            nn.Conv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.MaxPool2d(2, ceil_mode=True),
+            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU()
+        )
+        self.fc = nn.Linear(linear_in, 32)
+        self.lstm = nn.LSTM(hidden_size=128, input_size=32, batch_first=True, num_layers=2)
+        self.classifier = nn.Linear(128, out_size)
+
+    def forward(self, x, data_len):
+        batch_size = x.size(0)
+        padding_len = x.size(1)
+        h = x.size(2)
+        w = x.size(3)
+        x = x.view(-1, 1, h, w)
+        x = self.conv(x)
+        x = x.view(batch_size*padding_len, -1)
+        x = self.fc(x)
+        x = x.view(batch_size, padding_len, -1)
+        x = pack_padded_sequence(x, data_len.cpu(), batch_first=True)
+        output, (h_n, c_n) = self.lstm(x)
+        x = self.classifier(h_n[-1])
+        return x
+
 
 
 class DeepSolid(nn.Module):

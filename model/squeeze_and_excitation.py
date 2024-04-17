@@ -8,21 +8,22 @@ from utils import *
 class SE1dBlock(nn.Module):
     def __init__(self, in_channel, radio=1.0):
         super(SE1dBlock, self).__init__()
-        hidden_size = math.ceil(in_channel * radio)
-        self.fc1 = nn.Linear(in_channel, hidden_size, bias=False)
-        self.fc2 = nn.Linear(hidden_size, in_channel, bias=False)
+        hidden_size = math.ceil(in_channel // radio)
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.fc1 = nn.Conv1d(in_channel, hidden_size,1)
+        self.fc2 = nn.Conv1d(hidden_size, in_channel, 1)
 
     def forward(self, x):
-        weight = torch.mean(x, dim=-1)
+        weight = self.pool(x)
         weight = self.fc1(weight)
         weight = F.relu(weight)
         weight = self.fc2(weight)
         weight = torch.sigmoid(weight)
 
-        weight = weight[:, :, None]
-        weight = weight * x
+        #weight = weight[:, :, None]
+        #weight = weight * x
 
-        return x + weight
+        return x * weight
 
 
 class ThrSEBlock(nn.Module):

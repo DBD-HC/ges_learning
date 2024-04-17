@@ -1,19 +1,16 @@
 import math
+import os
 
 import numpy as np
 import random
+from scipy import interpolate
+import torch
+from torchvision.transforms import transforms
+from tqdm import tqdm
 
 data_len_adjust_gap = [-5, -4, -3, 3, 4, 5]
 
 
-# rotating matrix
-# cosβ| − sinβ|rx(1 − cosβ) + ry*sinβ
-# sinβ|   cosβ|ry(1 − cosβ) − rx*sinβ
-#    0|      0| 1
-# scaling matrix
-#   γx|      0|sx(1 − γx)
-#    0|     γy|sy(1 − γy)
-#    0|      0| 1
 def get_geometric_transform_mat(rotate_angle, rotate_center, scale_factor, scale_center):
     cos_b = np.cos(rotate_angle)
     sin_b = np.sin(rotate_angle)
@@ -44,12 +41,7 @@ def random_geometric_features(datas):
     datas = simple_shift_list(datas, delta_xy[0], delta_xy[1])
     return datas
 
-
-def data_normalization(d, *args):
-    # mean = np.mean(d)
-    #     var = np.var(d)
-    #     d = (d - mean) / np.sqrt(var + 1e-9)
-    # d = (d - np.min(d))/ (np.min(d) - d.max)
+def z_score(d):
     var = np.var(d)
     mean = np.mean(d)
     d = (d - mean) / np.sqrt(var + 1e-9)
@@ -158,6 +150,65 @@ def simple_shift(datas, d_distance, d_angle):
     return datas
 
 
+def crop(rais):
+    mean_rai = np.mean(rais, axis=(0, -1))
+    mean_rai[:7] = 0
+    max_index = np.argmax(mean_rai)
+    rais = simple_shift(rais, rais.shape[-2]//2 - max_index, 0)
+    return rais
+
+def crop_rdi(d):
+    d = np.sqrt(d[:, 0::2] ** 2 + d[:, 1::2] ** 2)
+    d = np.mean(d, axis=1)
+    d = crop(d)
+    d = d - np.mean(d, axis=0)[None, :]
+    d[d < 0] = 0
+    # static removal
+    d[:, :, 15:18] = 0
+    return d
+
+def resample_time(rdis, ratio):
+    rdis =  np.transpose(rdis, (2, 1, 0))
+    x = np.linspace(0, 1, rdis.shape[2])  # 比率为1.5
+    y = np.linspace(0, 1, rdis.shape[1])
+    new_x = np.linspace(0, 1, int(rdis.shape[2] * ratio))
+    new_rdis = np.empty((rdis.shape[0], rdis.shape[1], len(new_x)))
+    for i, rdi in enumerate(rdis):
+        f = interpolate.interp2d(x, y, rdi, kind='linear')
+        new_rdis[i] = f(new_x, y)
+    new_rdis =  np.transpose(new_rdis, (2, 1, 0))
+    return new_rdis
+
+def resample(rdis, ratio):
+    new_rdis = np.zeros_like(rdis)
+    # 定义x和y的坐标
+    x = np.linspace(0, 1, rdis.shape[2])  # 比率为1.5
+    y = np.linspace(0, 1, rdis.shape[1])
+    # 定义新的x和y的坐标，按比率重新采样
+    new_x = np.linspace(0, 1, int(rdis.shape[2] * ratio))
+    for i, rdi in enumerate(rdis):
+        # 创建插值函数
+        f = interpolate.interp2d(x, y, rdi, kind='linear')
+
+        # 对新的x和y坐标进行插值
+        len_x = len(new_x)
+
+        if len_x > rdi.shape[1]:
+            center_x = int(len_x / 2)
+            left_s = rdi.shape[1] // 2
+            right_s = rdi.shape[1] - left_s
+            new_rdis[i] = f(new_x, y)[:, center_x - left_s:center_x + right_s]
+        else:
+            center_x = int(rdi.shape[1] / 2)
+            left_s = len_x // 2
+            right_s = len_x - left_s
+            new_rdis[i, :, center_x - left_s:center_x + right_s] = f(new_x, y)[:, :]
+
+    new_rdis = resample_time(new_rdis, ratio)
+
+    return new_rdis
+
+
 def get_after_conv_size(size, kernel_size, layer, dilation=1, padding=0, stride=1, reduction=1):
     size = (size + 2 * padding - dilation * (kernel_size - 1) - 1) // stride + 1
     size = math.ceil(size / reduction)
@@ -166,75 +217,46 @@ def get_after_conv_size(size, kernel_size, layer, dilation=1, padding=0, stride=
     else:
         return get_after_conv_size(size, kernel_size, layer - 1, dilation, padding, stride, reduction)
 
-
-import numpy as np
-
-
-def get_cfar_2d_threshold_factor(guard_size=2, train_size=4, pfa=0.1):
-    N = ((guard_size + train_size + 1) * 2) ** 2 - ((guard_size + 1) * 2) ** 2
-
-    return N * (np.power(pfa, -1 / N) - 1)
+def get_track(rai):
+    rai_max = np.max(rai, axis=0)
+    rai_mean = np.mean(rai, axis=0)
+    rai_std = np.std(rai, axis=0)
+    global_track = np.concatenate((rai_max[None, :], rai_mean[None, :], rai_std[None, :]), axis=0)
+    return global_track
 
 
-threshold_factor = get_cfar_2d_threshold_factor()
+td_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+])
 
+def rdi_complex_to_single(rai_path, target_path):
+    d = np.load(rai_path)
+    d = np.sqrt(d[:, 0::2] ** 2 + d[:, 1::2] ** 2)
+    d = np.mean(d, axis=1)
+    d = d - np.mean(d, axis=0)[None, :]
+    d[d < 0] = 0
+    d[:, :, 15:18] = 0
+    np.save(target_path, d.astype(np.float32))
 
-def ca_cfar_2d(data, guard_size=2, train_size=4, thr_factor=2.5):
-    num_rows, num_cols = data.shape
-    detections = np.zeros((num_rows, num_cols))
+def generate_single_rdi(rdi_root, target_root):
+    rai_filenames = os.listdir(rdi_root)
+    for filename in tqdm(rai_filenames):
+        if filename.endswith('.npy'):
+            rdi_complex_to_single(os.path.join(rdi_root, filename), os.path.join(target_root, filename))
 
-    for i in range(guard_size, num_rows - guard_size):
-        for j in range(guard_size, num_cols - guard_size):
-            train_cells = []
-            guard_cells = []
+def rais_to_time_frequency(rai_path, target_path):
+    rai = np.load(rai_path)
+    rai = z_score(rai)
+    time_angle = np.mean(rai, axis=-2)[None, :]
+    time_range = np.mean(rai, axis=-1)[None, :]
+    input_data = np.concatenate((time_range, time_angle), axis=0)
+    input_data = torch.from_numpy(input_data)
+    input_data = td_transform(input_data)
+    input_data = input_data.numpy()
+    np.save(target_path, input_data.astype(np.float32))
 
-            # Collect cells for training region
-            for row_offset in range(-train_size, train_size + 1):
-                for col_offset in range(-train_size, train_size + 1):
-                    if abs(row_offset) <= guard_size and abs(col_offset) <= guard_size:
-                        guard_cells.append(data[i + row_offset, j + col_offset])
-                    else:
-                        train_cells.append(data[i + row_offset, j + col_offset])
-
-            # Calculate threshold
-            threshold = np.mean(train_cells) * threshold_factor
-
-            # Check if signal cell is greater than threshold
-            if data[i, j] > threshold:
-                detections[i, j] = 1
-
-    detections = detections == 0
-    data[detections] = min(data)
-    return data
-
-def down_sample(frames, target_data_len):
-    data_len = len(frames)
-    n_delete_frame = data_len - target_data_len
-    gap = data_len / n_delete_frame
-    temp = 0
-    target_frames = torch.empty((target_data_len + 1, frames.size(-2), frames.size(-1)))
-    i = 0
-    for frame in frames:
-        temp += 1
-        if temp < gap:
-            target_frames[i] = frame
-            i += 1
-        else:
-            temp -= gap
-    return target_frames[:target_data_len]
-
-
-def getModelSize(model):
-    param_size = 0
-    param_sum = 0
-    for param in model.parameters():
-        param_size += param.nelement() * param.element_size()
-        param_sum += param.nelement()
-    buffer_size = 0
-    buffer_sum = 0
-    for buffer in model.buffers():
-        buffer_size += buffer.nelement() * buffer.element_size()
-        buffer_sum += buffer.nelement()
-    all_size = (param_size + buffer_size) / 1024 / 1024
-    print('模型总大小为：{:.2f}MB'.format(all_size))
-    return (param_size, param_sum, buffer_size, buffer_sum, all_size)
+def generate_time_doppler(rai_root, target_root):
+    rai_filenames = os.listdir(rai_root)
+    for filename in tqdm(rai_filenames):
+        if filename.endswith('.npy'):
+            rais_to_time_frequency(os.path.join(rai_root, filename), os.path.join(target_root, filename))

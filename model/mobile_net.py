@@ -4,6 +4,8 @@ from model.mask_batchnorm import *
 import torch.nn.functional as F
 import math
 
+from model.squeeze_and_excitation import SE1dBlock
+
 
 class MobileNetV1Block1D(nn.Module):
     def __init__(self, in_channel, out_channel):
@@ -349,11 +351,9 @@ class SingleDimConv3(nn.Module):
     def __init__(self, in_channel=32, channel_num=None, input_size=32, dropout=0.5):
         super(SingleDimConv3, self).__init__()
         # self.conv0 = Conv1dBnRelu(in_channel, 8, stride=1, kernel_size=3, bn=True, active=True, padding=1)
-        self.conv1 = Conv1dBnRelu(in_channel, 8, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
-        self.conv2 = Conv1dBnRelu(8, 16, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
-        self.conv3 = Conv1dBnRelu(16, 32, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
-
-        # self.conv4 = Conv1dBnRelu(16, 16, stride=1, kernel_size=3, bn=False, bias=True, active=True, padding=1, group=2)
+        self.conv1 = Conv1dBnRelu(in_channel, 8, stride=2, kernel_size=3, bn=False, active=True, bias=True, padding=0)
+        self.conv2 = Conv1dBnRelu(8, 16, stride=2, kernel_size=3, bn=True, active=True, bias=False, padding=0)
+        self.conv3 = Conv1dBnRelu(16, 32, stride=2, kernel_size=3, bn=True, active=True, bias=False, padding=0)
 
         # self.conv4 = Conv1dBnRelu(8, 16, stride=1, kernel_size=3, bn=True, active=True, padding=1)
         self.mp = nn.MaxPool1d(2, ceil_mode=True)
@@ -363,11 +363,11 @@ class SingleDimConv3(nn.Module):
     def forward(self, x):
         # res = self.conv0(x)
         x = self.conv1(x)
-        x = self.mp(x)
+        #x = self.mp(x)
         x = self.conv2(x)
-        x = self.mp(x)
+        #x = self.mp(x)
         x = self.conv3(x)
-        x = self.mp(x)
+        #x = self.mp(x)
 
         return x
 
@@ -377,7 +377,7 @@ class SingleDimConv4(nn.Module):
         super(SingleDimConv4, self).__init__()
         # self.conv0 = Conv1dBnRelu(in_channel, 8, stride=1, kernel_size=3, bn=True, active=True, padding=0)
         self.conv1 = Conv1dBnRelu(in_channel, 16, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
-        self.conv2 = Conv1dBnRelu(16, 16, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
+        self.conv2 = Conv1dBnRelu(16, 8, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)
         self.point0 = Conv1dBnRelu(in_channel, 16, stride=1, kernel_size=1, bn=False, active=True, bias=True, padding=0)
 
         self.conv3 = Conv1dBnRelu(16, 16, stride=1, kernel_size=3, bn=False, active=True, bias=True, padding=1)

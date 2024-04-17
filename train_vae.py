@@ -11,7 +11,7 @@ import torch
 # 假设有一个32x32的频谱图作为输入
 from torch.nn.utils.rnn import pad_sequence
 
-from data.di_gesture_dataset import split_data, rai_data_root
+from data.mcd_dataset import split_data, rai_data_root
 from train import set_random_seed
 from utils import simple_shift_list
 

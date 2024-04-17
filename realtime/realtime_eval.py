@@ -2,7 +2,7 @@ import os.path
 
 import numpy as np
 import torch
-from data.di_gesture_dataset import *
+from data.mcd_dataset import *
 from model.network import RAIRadarGestureClassifier
 from visual.feat_visualizer import pca_visualize, tsne_visualize, feat_heatmap
 
@@ -45,9 +45,9 @@ def ges_classify():
 
 def visual_diff_hidden_feats(act='y_SlideLeft'):
     model = get_model()
-    sn = model.sn
+    sn = model.frame_model
     sn.need_diff = False
-    range_m = sn.range_att
+    range_m = sn.range_conv
     range_m.need_diff = False
     model = sn
     position1_list = []
@@ -64,7 +64,7 @@ def visual_diff_hidden_feats(act='y_SlideLeft'):
                 pca_visualize(res[0], win=act+pos, clazz=pos, all_clazz=locations, title=act+pos)
                 res = run_model(get_data(act=act, pos=pos), lambda rdi, data_len: range_m(torch.squeeze(rdi)[:, None, :],
                                                                                               rdi.size(0), rdi.size(1)))
-                sn = model.sn
+                sn = model.frame_model
                 sn_diff = sn.diff
                 feat1 = torch.squeeze(sn_diff.featmap1).detach().cpu().numpy()
                 if feat1_list is not None:

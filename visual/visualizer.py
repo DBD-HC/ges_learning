@@ -5,7 +5,7 @@ import matplotlib.pylab as plt
 import torch
 import torch.nn.functional as F
 
-from data.di_gesture_dataset import *
+from data.mcd_dataset import *
 
 
 visdom = visdom.Visdom(env='visual', port=6006)

@@ -2,7 +2,7 @@ import os
 
 import torch.nn.functional
 
-from data.di_gesture_dataset import *
+from data.mcd_dataset import *
 import numpy as np
 
 rai_data_path = '/root/autodl-tmp/dataset/mmWave_cross_domain_gesture_dataset'

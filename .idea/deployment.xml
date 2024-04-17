@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="root@region-3.seetacloud.com:51087" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="root@region-45.autodl.pro:53109" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
       <paths name="28316">
         <serverdata>
@@ -500,6 +500,20 @@
         </serverdata>
       </paths>
       <paths name="root@region-31.seetacloud.com:28316">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/root/autodl-tmp/project" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@region-31.seetacloud.com:46092">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/root/autodl-tmp/project" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@region-45.autodl.pro:53109">
         <serverdata>
           <mappings>
             <mapping deploy="/root/autodl-tmp/project" local="$PROJECT_DIR$" />

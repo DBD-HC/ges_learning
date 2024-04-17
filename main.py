@@ -6,7 +6,7 @@ import scipy.io as sio
 
 # root = 'D:\\data\\Triple Sensor Data\\Button_Press'
 
-# ph = PyHeat('di_gesture_dataset.py')
+# ph = PyHeat('mcd_dataset.py')
 # ph.create_heatmap()
 # ph.show_heatmap()
 # print(np.argmax(array.reshape(len(array), -1), axis=-1), array[0].shape)

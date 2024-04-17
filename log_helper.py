@@ -12,7 +12,7 @@ class LogHelper:
         logger.setLevel(logging.DEBUG)
 
         # 创建一个 RotatingFileHandler 实例，将日志保存到文件中
-        log_file = 'run_result_{}.txt'.format(formatted_datetime)
+        log_file = 'run_log_{}.txt'.format(formatted_datetime)
         handler = RotatingFileHandler(log_file, maxBytes=1024 * 1024, backupCount=5)
         handler.setLevel(logging.DEBUG)
 
