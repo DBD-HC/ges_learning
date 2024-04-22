@@ -1,8 +1,0 @@
-
-使用步骤：
-1. 使用mmWaveStudio的lua shell加载脚本init_1843.lua,完成雷达参数配置
-2. 运行脚本data_collection.py
-3. 使用mmWaveStudio的lua shell加载脚本auto_capture.lua,启动雷达
-
-需要修改181到186行的雷达参数，根据加载的配置文件进行修改。
-

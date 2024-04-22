@@ -1,7 +1,6 @@
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 from model.attention import *
-from model.mobile_net import *
-from model.squeeze_and_excitation import *
+from utils import get_after_conv_size
 
 
 class Conv1dBnRelu(nn.Module):

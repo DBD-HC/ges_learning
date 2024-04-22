@@ -1,31 +1,7 @@
 import torch.nn as nn
 import torch
-import math
 import torch.nn.functional as F
 import numpy as np
-from model.mobile_net import Conv1dBnRelu
-
-# 定义位置编码器
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_seq_len):
-        super(PositionalEncoding, self).__init__()
-        self.d_model = d_model
-        # 创建一个含所有位置的位置编码矩阵
-        position = torch.arange(max_seq_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_seq_len, d_model)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        # 将位置编码矩阵注册为模型的可学习参数
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        # 将位置编码矩阵添加到词嵌入上
-        x = x * math.sqrt(self.d_model)
-        seq_len = x.size(1)
-        x = x + self.pe[:, :seq_len]
-        return x
 
 def masked_softmax(inputs, valid_length):
     if valid_length is None:
@@ -67,29 +43,6 @@ def recover(x, num_heads):
     return outputs.reshape(outputs.shape[0], outputs.shape[1], -1)
 
 
-class LiteMultiHeadAttention(nn.Module):
-    def __init__(self, key_size, query_size, value_size, num_hidden, num_heads, dropout, bias=False):
-        super(LiteMultiHeadAttention, self).__init__()
-        self.num_heads = num_heads
-        self.attention = DotProductAttention(dropout)
-        self.w_q = nn.Linear(query_size, num_hidden, bias=bias)
-        self.w_k = nn.Linear(query_size, num_hidden, bias=bias)
-        self.w_o = nn.Linear(num_hidden, num_hidden, bias=bias)
-        nn.init.normal_(self.w_q.weight, mean=0, std=np.sqrt(2.0 / (query_size + key_size)))
-        nn.init.normal_(self.w_k.weight, mean=0, std=np.sqrt(2.0 / (query_size + key_size)))
-
-    def forward(self, queries, keys, values, valid_lens=None):
-        queries = split_by_heads(self.w_q(queries), self.num_heads)
-        keys = split_by_heads(self.w_k(keys), self.num_heads)
-        values = split_by_heads(values, self.num_heads)
-        if valid_lens is not None:
-            valid_lens = torch.repeat_interleave(valid_lens, self.num_heads, dim=0)
-        outputs = self.attention(queries, keys, values, valid_lens)
-        outputs = recover(outputs, self.num_heads)
-        return outputs
-
-
-
 class MultiHeadAttention(nn.Module):
     def __init__(self, key_size, query_size, value_size, num_hidden, num_heads, dropout, bias=False):
         super(MultiHeadAttention, self).__init__()
@@ -113,47 +66,3 @@ class MultiHeadAttention(nn.Module):
         outputs = recover(outputs, self.num_heads)
         outputs = self.w_o(outputs)
         return outputs
-
-
-# 定义多头注意力层
-class MultiHeadAttentionFusion(nn.Module):
-    def __init__(self, input_dim, num_heads):
-        super(MultiHeadAttentionFusion, self).__init__()
-        self.num_heads = num_heads
-        self.head_dim = input_dim // num_heads
-
-        # 注意力机制中使用的线性层
-        self.query_linear = nn.Linear(input_dim, input_dim)
-        self.key_linear = nn.Linear(input_dim, input_dim)
-        self.value_linear = nn.Linear(input_dim, input_dim)
-
-        # 输出线性层
-        self.out_linear = nn.Linear(input_dim, input_dim)
-
-    def forward(self, features):
-        # 拼接所有特征张量
-        #concatenated_features = torch.cat(features, dim=1)
-
-        # 将特征张量进行线性变换得到查询（query）、键（key）和值（value）张量
-        queries = self.query_linear(features)
-        keys = self.key_linear(features)
-        values = self.value_linear(features)
-        batch_size = features.size(0)
-
-        # 将张量按头数拆分
-        queries = queries.view(batch_size, self.num_heads, -1, self.head_dim).transpose(1, 2)
-        keys = keys.view(batch_size, self.num_heads, -1, self.head_dim).transpose(1, 2)
-        values = values.view(batch_size, self.num_heads, -1, self.head_dim).transpose(1, 2)
-
-        # 计算注意力分数
-        attention_scores = torch.matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(
-            torch.tensor(self.head_dim, dtype=torch.float32))
-        attention_weights = torch.nn.functional.softmax(attention_scores, dim=-1)
-
-        # 通过注意力权重加权求和得到融合特征
-        attention_fused = torch.matmul(attention_weights, values).transpose(1, 2).contiguous().view(batch_size, -1,
-                                                                                                    self.num_heads * self.head_dim)
-
-        # 输出线性变换得到最终输出
-        output = self.out_linear(attention_fused)
-        return output
