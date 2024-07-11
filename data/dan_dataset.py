@@ -9,9 +9,6 @@ from data.data_splitter import data_normalization
 from data.rai_ges_dataset import random_translation
 from utils import simple_shift, random_geometric_features, random_data_len_adjust_2
 
-#static_angle_range = np.arange(-20, 21)
-#static_distance_range = np.arange(-6, 7)
-#data_len_adjust_gap = [-3, -4, -5]
 
 
 def compare_replace(d, v):
@@ -30,8 +27,9 @@ def z_score(d):
     d = (d - mean_d) / np.sqrt(var_d + 1e-9)
     return d
 
-target_static_angle_range = np.arange(-4, 5)
-target_static_distance_range = np.arange(-4, 5)
+target_static_angle_range = np.arange(-6, 7)
+target_static_distance_range = np.arange(-6, 7)
+target_data_len_adjust_gap = [-3, -4, -5]
 
 def random_translation2(datas):
 
@@ -42,7 +40,9 @@ def data_augmentation_target(d, data_type=None):
     d_angle = random.choice(target_static_angle_range)
     simple_shift(d, d_distance, d_angle)
     d = random_geometric_features(d)
-    d = random_data_len_adjust_2(d)
+    gap = random.choice(target_data_len_adjust_gap)
+    d = random_data_len_adjust_2(d, gap=gap)
+    d = data_normalization(d, 0)
     return d
 
 
@@ -71,21 +71,20 @@ class DANDataset(Dataset):
     def get_data(self, index):
         d1 = np.load(os.path.join(self.data_root, self.file_names[index]))
         label1 = self.labels[index]
-        d1_aug = np.zeros_like(d1)
 
+        d1_aug = np.zeros_like(d1)
         d1_aug[:] = d1[:]
         d1 = self.transform(d1, 0)
         d1_aug = self.transform(d1_aug, 0)
+        #d1_aug = data_augmentation_target(d1_aug, 0)
         #d1 = data_augmentation_source(d1, 0)
-        #d1 = z_score(d1)
-        #d1_aug = z_score(d1_aug)
 
+        track1 = get_track(d1)
+        track1 =torch.from_numpy(track1).type(torch.float32)
         d1 = torch.from_numpy(d1).type(torch.float32)
         label1 = torch.tensor(label1)
-
         d1_aug = torch.from_numpy(d1_aug).type(torch.float32)
-
-        return d1, d1_aug, label1
+        return d1, track1, d1_aug, label1
 
     def __getitem__(self, index):
         # label = torch.tensor([int(label1 == label2)], dtype=torch.float32)

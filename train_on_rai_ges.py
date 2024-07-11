@@ -23,7 +23,7 @@ if __name__ == '__main__':
     # k_fold(augmentation=True, epoch=200, start_epoch=0, domain=0, data_type=RANGE_ANGLE_IMAGE, batch_size=128,
     #        model_type=0, train_manager=None, data_spliter=complex_DataSplitter)
     # cross user
-    cross_domain(augmentation=True, model_type=2, data_type=RANGE_ANGLE_IMAGE, domain=4,
+    cross_domain(augmentation=True, model_type=0, data_type=RANGE_ANGLE_IMAGE, domain=4,
                  train_index=None,
                  test_index=None,
                  val_time=5, need_test=True,

@@ -22,6 +22,20 @@ if __name__ == '__main__':
     # 3:location
     # 4:only one domain
 
+
+    # cross environment
+    cross_domain(augmentation=True, model_type=0, data_type=RANGE_ANGLE_IMAGE, domain=2,
+                 train_index=[5],
+                 test_index=[0, 1, 2, 3, 4],
+                 val_time=5,
+                 epoch=200, data_spliter=di_DataSplitter)
+    # cross environment
+    cross_domain(augmentation=True, model_type=0, data_type=RANGE_ANGLE_IMAGE, domain=2,
+                 train_index=[0],
+                 test_index=[1, 2, 3, 4, 5],
+                 val_time=5,
+                 epoch=200, data_spliter=di_DataSplitter)
+
     cross_domain(augmentation=True, model_type=2, data_type=RANGE_ANGLE_IMAGE, domain=4,
                  train_index=None,
                  test_index=None,
@@ -36,18 +50,6 @@ if __name__ == '__main__':
                  need_test=True,
                  epoch=200, data_spliter=di_DataSplitter)
 
-    # cross environment
-    cross_domain(augmentation=True, model_type=0, data_type=RANGE_ANGLE_IMAGE, domain=2,
-                 train_index=[5],
-                 test_index=[0, 1, 2, 3, 4],
-                 val_time=5,
-                 epoch=200, data_spliter=di_DataSplitter)
-    # cross environment
-    cross_domain(augmentation=True, model_type=0, data_type=RANGE_ANGLE_IMAGE, domain=2,
-                 train_index=[0],
-                 test_index=[1, 2, 3, 4, 5],
-                 val_time=5,
-                 epoch=200, data_spliter=di_DataSplitter)
 
     # cross user
     cross_domain(augmentation=True, model_type=0, data_type=RANGE_ANGLE_IMAGE, domain=1,

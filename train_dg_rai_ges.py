@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import visdom
 
-from data.dan_dataset import DANDataset
+from data.dan_dataset import DANDataset, data_augmentation_target
 from data.mcd_dataset import MCDDataSplitter, data_augmentation as mcd_aug
 from data.rai_ges_dataset import RAIGesDataSplitter, data_augmentation as rai_aug
 from model.target_free_dann import *
@@ -22,6 +22,12 @@ def set_random_seed(seed=1998):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+def frame_norm(data):
+    data_mean = torch.mean(data, dim=(-2, -1), keepdim=True)
+    data_var = torch.var(data, dim=(-2, -1), keepdim=True)
+    data = (data - data_mean)/torch.sqrt(data_var + 1e-9)
+    return data
 
 def deep_rai_collate_fn(datas_and_labels):
     datas_and_labels = sorted(datas_and_labels, key=lambda x: x[0].size()[0], reverse=True)
@@ -49,14 +55,15 @@ def dg_collate_fn2(datas_and_labels):
     inputs1 = [item[0] for item in datas_and_labels]
     data_lengths1 = [len(x) for x in inputs1]
     inputs1 = pad_sequence(inputs1, batch_first=True, padding_value=0)
-    # tracks1 = torch.stack([item[1] for item in datas_and_labels])
-    inputs2 = [item[1] for item in datas_and_labels]
+    tracks1 = torch.stack([item[1] for item in datas_and_labels])
+    label1 = torch.stack([item[3] for item in datas_and_labels])
+    inputs2 = [item[2] for item in datas_and_labels]
     data_lengths2 = [len(x) for x in inputs2]
     inputs2 = pad_sequence(inputs2, batch_first=True, padding_value=0)
     # tracks2 = torch.stack([item[3] for item in datas_and_labels])
-    label1 = torch.stack([item[2] for item in datas_and_labels])
+    label2 = torch.stack([item[3] for item in datas_and_labels])
 
-    return inputs1, torch.tensor(data_lengths1), inputs2, torch.tensor(data_lengths2),label1
+    return inputs1, torch.tensor(data_lengths1), inputs2, torch.tensor(data_lengths2), tracks1, label1, label2
 
 
 def get_lr(total_epoch=200):
@@ -68,27 +75,23 @@ def get_lr(total_epoch=200):
 
 def get_gr_lr(total_epoch=200):
     lr_list = np.zeros(total_epoch)
-    lr_list[:total_epoch // 2] = 0.001
-    lr_list[total_epoch // 2:total_epoch // 2 + total_epoch // 4] = 0.0003
-    lr_list[total_epoch // 2 + total_epoch // 4:] = 0.
+    lr_list[:total_epoch // 4] = 0.01
+    lr_list[total_epoch // 4:total_epoch // 4 + total_epoch // 4] = 0.
+    lr_list[total_epoch // 4 + total_epoch // 4:] = 0.
     return lr_list
 
 
-def frame_norm(data):
-    data_mean = torch.mean(data, dim=-1, keepdim=True)
-    std = torch.std(data, dim=-1, keepdim=True)
-    data = (data - data_mean)/(std + 1e-9)
-    return data
+
 
 
 def negative_cosine_similarity(real_d, fake_d, phi=0.8):
     """ D(p, z) = -(p*z).sum(dim=1).mean() """
-    real_r = torch.mean(real_d, dim=-1)
-    fake_r = torch.mean(fake_d, dim=-1)
-    real_a = torch.mean(real_d, dim=-2)
-    fake_a = torch.mean(fake_d, dim=-2)
-    angle_recon_loss = F.relu(phi - F.cosine_similarity(frame_norm(real_a), frame_norm(fake_a), dim=-1)).mean()
-    range_recon_loss = F.relu(phi - F.cosine_similarity(frame_norm(real_r), frame_norm(fake_r), dim=-1)).mean()
+    real_r = torch.max(real_d, dim=-1).values
+    fake_r = torch.max(fake_d, dim=-1).values
+    real_a = torch.max(real_d, dim=-2).values
+    fake_a = torch.max(fake_d, dim=-2).values
+    angle_recon_loss = F.relu(phi - F.cosine_similarity(real_a, fake_a, dim=-1)).mean()
+    range_recon_loss = F.relu(phi - F.cosine_similarity(real_r, fake_r, dim=-1)).mean()
     return range_recon_loss + angle_recon_loss
 
 def recon_loss(real_d, fake_d, data_len=None):
@@ -99,11 +102,13 @@ def recon_loss(real_d, fake_d, data_len=None):
     fake_d = fake_d[mask]
     return F.mse_loss(fake_d, real_d)
 
-def get_norm(rais):
-    rai_mean = torch.mean(rais, dim=(-2, -1), keepdim=True)
-    rai_var = torch.var(rais, dim=(-2, -1), keepdim=True)
-    rais = (rais- rai_mean)/torch.sqrt(rai_var + 1e-9)
-    return rais
+def get_norm(rai, data_len, eps=1e-9):
+    rai_packed = rai[:data_len]
+    # 计算每个维度的最大值、均值和标准差
+    rai_mean = torch.mean(rai_packed)
+    rai_var = torch.var(rai_packed)
+    rai = (rai - rai_mean) / torch.sqrt(rai_var + eps)
+    return rai
 
 def negative_cosine_similarity2(real_d, fake_d, phi=0.8, data_len=None):
     """ D(p, z) = -(p*z).sum(dim=1).mean() """
@@ -117,8 +122,11 @@ def negative_cosine_similarity2(real_d, fake_d, phi=0.8, data_len=None):
     #return F.mse_loss(real_d, fake_d)
     return F.relu(phi - F.cosine_similarity(real_d, fake_d, dim=-1)).mean() # + F.mse_loss(real_d.mean(-1), fake_d.mean(-1))
 
-def get_track(rai, data_len):
-    packed_rai = rai[:data_len]
+def get_track(rai, data_len=None):
+    if data_len is not None:
+        packed_rai = rai[:data_len]
+    else:
+        packed_rai = rai
     # packed_rai = frame_norm(packed_rai)
     # 计算每个维度的最大值、均值和标准差
     rai_max = torch.max(packed_rai, dim=0).values
@@ -159,13 +167,6 @@ def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=T
     lr = get_lr(num_epochs)
     lr2 = get_gr_lr(num_epochs)
 
-    # train_index = [1]
-    # test_index = [0, 2, 3, 4]
-    # train_index = [1]
-    # test_index = [0, 2, 3, 4]
-    # rai_ges_splitter = RAIGesDataSplitter()
-    # domain = 3
-    # need_test = True
     domain_num = len(test_index) if test_index is not None else 0
     if need_test:
         domain_num = domain_num + 1
@@ -185,9 +186,11 @@ def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=T
                                                                    need_augmentation=True)
         train_set1 = DANDataset(train_set.file_names, train_set.labels, data_root=train_set.data_root, transform=train_set.transform)
         train_loader = get_dataloader(train_set1, True, batch_size, dg_collate_fn2)
+        #train_loader_target = get_dataloader(train_set1, True, batch_size, deep_rai_collate_fn)
+
 
         if val_aug:
-            val_set.transform = train_set.transform
+            val_set.transform = data_augmentation_target
         val_loader = get_dataloader(val_set, False, batch_size, deep_rai_collate_fn)
 
         total_step = len(train_loader)
@@ -196,64 +199,70 @@ def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=T
             g_model.train()
             t = 0
             len_dataloader = len(train_loader)
-            for i, (datas1, data_len1, datas2, data_len2,  l1) in enumerate(train_loader):
+            #data_target_iter = iter(train_loader_target)
+            #for i, (datas1, data_len1, tracks1, l1) in enumerate(train_loader_source):
+            for i, (datas1, data_len1, datas2, data_len2, tracks1,  l1, l2) in enumerate(train_loader):
                 p = float(i + epoch * len_dataloader) / num_epochs / len_dataloader
-                alpha = 2. / (1. + np.exp(-10 * p)) - 1
-                # alpha = 1
+                alpha1 = 2. / (1. + np.exp(-10 * p)) - 1
+                alpha = alpha1
+                beta = 1
+                #alpha = 1
                 t += 1
+                #datas2, data_len2, tracks2, l2 = data_target_iter.next()
                 optimizer.param_groups[0]['lr'] = lr[epoch]
                 g_optimizer.param_groups[0]['lr'] = lr[epoch]
                 datas1 = datas1.to(device)
+                tracks1 = tracks1.to(device)
                 data_len1 = data_len1.to(device)
                 datas2 = datas2.to(device)
                 data_len2 = data_len2.to(device)
                 l1 = l1.to(device)
-                #beta = 1/alpha if alpha > 0 else 0
+                l2 = l2.to(device)
 
-                fake_data, fake_data_rev = g_model(datas2, 1, data_len2)
+                fake_data, fake_data_rev, recon_data= g_model(datas2, beta, data_len2)
+                fake_data_input = torch.stack([get_norm(sample, data_len2[si]) for si, sample in enumerate(fake_data)])
+                fake_track = torch.stack([get_track(x, data_len2[x_i]) for x_i, x in enumerate(fake_data_input)])
+                z2 = model(fake_data_input, fake_track, data_len2, alpha, False)
 
                 # 重构损失
-                loss_recon = negative_cosine_similarity2(datas2.view(-1, 1024), fake_data.view(-1, 1024), phi=phi, data_len=data_len2)#\
-                # loss_recon = recon_loss(datas2.view(-1, 1024), fake_data.view(-1, 1024), data_len=data_len2)
+                loss_recon1 = alpha1 * criterion(z2, l2) + negative_cosine_similarity2(datas2.view(-1,1024), fake_data.view(-1, 1024), data_len=data_len2, phi=phi)
+                #loss_recon1 = content_loss
+                #loss_recon1 = recon_loss(datas2.view(-1, 1024), recon_data.view(-1, 1024), data_len=data_len2)
 
-                fake_track = torch.stack([get_track(x, data_len2[x_i]) for x_i, x in enumerate(fake_data)])
-                fake_track_rev = torch.stack([get_track(x, data_len2[x_i]) for x_i, x in enumerate(fake_data_rev)])
-                tracks = torch.stack([get_track(x, data_len1[x_i]) for x_i, x in enumerate(datas1)])
-                #with torch.no_grad():
-                #    fake_data2 = g_model(datas1)
+                g_optimizer.zero_grad()
+                loss_recon1.backward()
+                g_optimizer.step()
 
-                #fake_track2 = torch.stack([get_track(x, data_len1[x_i]) for x_i, x in enumerate(fake_data2)])
-                # weight = torch.randn((datas1.size(0), datas1.size(1), 1, 1), device=device)
-                # fake_mix = weight * fake_data + (1 - weight) * datas1
+                fake_data, fake_data_rev, _= g_model(datas2, beta, data_len2)
+                #fake_data_input = torch.stack([get_norm(sample, data_len2[si]) for si, sample in enumerate(fake_data)])
+                fake_data_rev_input = torch.stack([get_norm(sample, data_len2[si]) for si, sample in enumerate(fake_data_rev)])
+                #fake_track = torch.stack([get_track(x, data_len2[x_i]) for x_i, x in enumerate(fake_data)])
+                fake_track_rev = torch.stack([get_track(x, data_len2[x_i]) for x_i, x in enumerate(fake_data_rev_input)])
 
-                z1, m1 = model(datas1, tracks, data_len1, alpha)
-                z2, m2 = model(fake_data_rev, fake_track_rev, data_len2, alpha, True)
-                z3 = model(fake_data, fake_track, data_len2, alpha, False)
-                # z_mix, _ = model(fake_mix, fake_track_mix, data_len1, alpha, False)
-
-                temp_acc1, _, _ = get_acc(z1, l1)
-                temp_acc2, _, _ = get_acc(z2, l1)
+                z1, m1 = model(datas1, tracks1, data_len1, alpha)
+                _, m2 = model(fake_data_rev_input, fake_track_rev, data_len2, alpha, True)
 
                 domain1 = torch.zeros(len(m1), device=device).long()
-                domain3 = torch.ones(len(m2), device=device).long()
+                domain2 = torch.ones(len(m2), device=device).long()
                 # 手势预测损失
-                loss_class = criterion(z1, l1) +  criterion(z3, l1) #+ criterion(z3, l1)
+                loss_class = criterion(z1, l1) #+ criterion(z3, l1)
                 # 域分类损失
-                loss_domain = criterion(m1, domain1) + criterion(m2, domain3)
+                loss_domain = criterion(m1, domain1) + criterion(m2, domain2)
 
-                d_acc1, _, _ = get_acc(m1, domain1)
-                d_acc2, _, _ = get_acc(m2, domain3)
-
-                loss = loss_class + loss_domain +  loss_recon  # + F.relu(1 - loss_con)
+                loss = loss_class + loss_domain  #+ content_loss #+ loss_recon2  # + F.relu(1 - loss_con)
 
                 with torch.no_grad():
+                    temp_acc1, _, _ = get_acc(z1, l1)
+                    temp_acc2, _, _ = get_acc(z2, l2)
+                    d_acc1, _, _ = get_acc(m1, domain1)
+                    d_acc2, _, _ = get_acc(m2, domain2)
                     vis.heatmap(datas2[0, 5], win='real', opts={
                         'title': 'real'
                     })
                     vis.heatmap(fake_data[0, 5], win='fake', opts={
                         'title': 'fake'
                     })
-                    vis.heatmap(tracks[0, 0], win='real_t', opts={
+                    vis.heatmap(tracks1[0, 0], win='real_t', opts={
                         'title': 'real_t'
                     })
                     vis.heatmap(fake_track[0, 0], win='fake_t', opts={
@@ -270,7 +279,7 @@ def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=T
                     print(
                         'Epoch [{}/{}], Step [{}/{}], Loss_total: {:.4f}, Loss:_class {:.4f}, Loss_domain: {:.4f}, Loss_rec: {:.4f} temp_acc1: {:.4f} temp_acc2: {:.4f} d_acc1: {:.4f} d_acc2: {:.4f}'
                         .format(epoch + 1, num_epochs, i + 1, total_step, loss.item(), loss_class.item(),
-                                loss_domain.item(), loss_recon.item(), temp_acc1, temp_acc2, d_acc1, d_acc2))
+                                loss_domain.item(), loss_recon1.item(), temp_acc1, temp_acc2, d_acc1, d_acc2))
 
             running_loss = 0.0
             running_loss1 = 0.0
@@ -303,13 +312,11 @@ def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=T
                                 v_i, i, 2], _, _ = train_manager.test_or_val(val_model, mid_test_loader)
                 val_model.classifier.need_hidden = True
 
-
-
             running_loss = running_loss / t
             print(
                 'loss1 {:.4f}, loss2 {:.4f}, total loss {:.4f}'.format(running_loss1 / t, running_loss2 / t,
                                                                        running_loss))
-            if running_loss < best_loss and epoch > num_epochs * 3 // 4:
+            if running_loss < best_loss and epoch > num_epochs * 7// 8:
                 best_loss = running_loss
                 torch.save({
                     'epoch': epoch,
@@ -317,6 +324,12 @@ def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=T
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': running_loss
                 }, os.path.join('checkpoint', 'test_dk.pth'))
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': g_model.state_dict(),
+                    'optimizer_state_dict': g_optimizer.state_dict(),
+                    'loss': running_loss
+                }, os.path.join('checkpoint', 'test_generator.pth'))
                 print('==saved==')
         params = torch.load(os.path.join('checkpoint', 'test_dk.pth'))['model_state_dict']
         model.load_state_dict(params)
@@ -360,24 +373,34 @@ if __name__ == '__main__':
 
     # train_dg(dataset_splitter=dataset_spliter, domain=1, need_test=True, train_index=[0], test_index=[1, 2, 3],
     #          phi=0.8)
+
+    #dataset_spliter = RAIGesDataSplitter()
     '''
-    dataset_spliter = RAIGesDataSplitter()
     # train_dg(dataset_splitter=dataset_spliter, domain=3, need_test=True, train_index=[1], test_index=[0, 2, 3, 4],
     #         phi=0.9)
     #
-    #train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=True, train_index=[1], test_index=[0, 2, 3, 4],
-    #         phi=0.8)
+    train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=True, train_index=[1], test_index=[0, 2, 3, 4],
+             phi=0.8)
     train_dg(dataset_splitter=dataset_spliter, domain=1, need_test=True, train_index=[0], test_index=[1, 2, 3],
              phi=0.8)
+
     train_dg(dataset_splitter=dataset_spliter, domain=3, need_test=False, train_index=[0, 6, 7],
              test_index=[1, 2, 3, 4, 5, 8, 9],
              phi=0.8)
     '''
     dataset_spliter = MCDDataSplitter()
-    '''
+    train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=False, train_index=[5], test_index=[0, 1, 2, 3, 4],
+            phi=0.8, val_aug=False)
+    train_dg(dataset_splitter=dataset_spliter, domain=3, need_test=True, train_index=[1],
+             test_index=[0, 2, 3, 4],
+             phi=0.8, val_aug=False)
+    train_dg(dataset_splitter=dataset_spliter, domain=1, need_test=False, train_index=[0, 1, 2, 3, 4],
+            test_index=[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+            phi=0.8, val_aug=False)
     
     #train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=False, train_index=[5], test_index=[0, 1, 2, 3, 4],
     #         phi=0.8, val_aug=False)
+    '''
     train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=False, train_index=[0], test_index=[1, 2, 3, 4, 5],
              phi=0.8)
     train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=False, train_index=[5], test_index=[0, 1, 2, 3, 4],
@@ -388,21 +411,23 @@ if __name__ == '__main__':
     
     train_dg(dataset_splitter=dataset_spliter, domain=3, need_test=True, train_index=[1],
              test_index=[0, 2, 3, 4],
-             phi=0.8, val_aug=False)
+             phi=0.4, val_aug=False)
     '''
-    dataset_spliter = RAIGesDataSplitter()
+    #dataset_spliter = RAIGesDataSplitter()
+    '''
     train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=True, train_index=[1], test_index=[0, 2, 3, 4],
              phi=0.9)
     train_dg(dataset_splitter=dataset_spliter, domain=1, need_test=True, train_index=[0], test_index=[1, 2, 3],
              phi=0.9)
+
     train_dg(dataset_splitter=dataset_spliter, domain=3, need_test=False, train_index=[0, 6, 7],
              test_index=[1, 2, 3, 4, 5, 8, 9],
-             phi=0.9)
-
+             phi=0.8)
+    '''
     #train_dg(dataset_splitter=dataset_spliter, domain=1, need_test=False,
     #         train_index=[0, 1, 2, 3, 4],
     #         test_index=[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
     #         phi=0.8)
 
-    train_dg(dataset_type=1, domain=4, need_test=True, train_index=None, test_index=None,
-             phi=0.8)
+    #train_dg(dataset_splitter=dataset_spliter, domain=4, need_test=True, train_index=None, test_index=None,
+    #         phi=0.8)

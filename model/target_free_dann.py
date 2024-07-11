@@ -10,28 +10,13 @@ class ReverseLayerF(Function):
     @staticmethod
     def forward(ctx, x, alpha):
         ctx.alpha = alpha
-
         return x.view_as(x)
 
     @staticmethod
     def backward(ctx, grad_output):
+        #print(f"before alpha:{ctx.alpha}+{grad_output[0, 0]}")
         output = grad_output.neg() * ctx.alpha
-        # print(f"alpha:{ctx.alpha}+{output}")
-        return output, None
-
-
-class NotReverseLayerF(Function):
-
-    @staticmethod
-    def forward(ctx, x, alpha):
-        ctx.alpha = alpha
-
-        return x.view_as(x)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        output = grad_output * ctx.alpha
-        # print(f"alpha:{ctx.alpha}+{output}")
+        #print(f"after alpha:{ctx.alpha}+{output[0, 0]}")
         return output, None
 
 
@@ -44,247 +29,97 @@ class Classifier(nn.Module):
         self.need_hidden = need_hidden
 
     def forward(self, x):
+        #x = ReverseLayerF.apply(x, -1)
         c = self.mlp(x)
         if not self.need_hidden:
             return c
         return x, c
 
 
-class AmpGenerator(nn.Module):
-    def __init__(self, in_channel=1, hidden_channel=1, kernel_size=3, in_size=(32, 32), eps=1e-5, zdim=32,
-                 need_adain=True):
-        super(AmpGenerator, self).__init__()
-        self.eps = eps
-        padding = (kernel_size - 1) // 2
-        mobilenet = models.mobilenet_v3_small(pretrained=True)
-        self.encoder = mobilenet.features[:12]
-        self.zdim = zdim
-        self.need_adain = need_adain
-        if need_adain:
-            self.rand_fc1 = nn.Sequential(
-                nn.Linear(self.zdim, 32),
-            )
-            self.rand_fc2 = nn.Sequential(
-                nn.Linear(self.zdim, 32),
-                nn.ReLU()
-            )
-        self.decoder = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=3, padding=1, padding_mode='reflect'),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 16, kernel_size=3, padding=1, padding_mode='reflect'),
-            nn.ReLU(inplace=True),
-
-        )
-        self.dp = nn.Dropout(0.)
-        # self.norm = nn.InstanceNorm2d(hidden_channel, affine=False)
-        self.alpha = nn.Parameter(torch.tensor(0.1), requires_grad=True)
-
-    def get_adain(self, x, dim, gamma, beta):
-        # origin = x
-        x = self.dp(x)
-        mean_x = torch.mean(x, dim=dim, keepdim=True)
-        var_x = torch.var(x, dim=dim, keepdim=True)
-        std_x = torch.sqrt(var_x + self.eps)
-        x = (x - mean_x) / std_x
-
-        alpha = F.sigmoid(self.alpha)
-        std_hat = (1 - alpha) * std_x + alpha * gamma
-        mean_hat = alpha * beta + (1 - alpha) * mean_x
-        x = x * std_hat + mean_hat
-
-        return x
-
-    def get_random(self, x, ):
-        z = torch.randn(len(x), self.zdim, device=x.device)
-        beta = self.rand_fc1(z)[:, :, None, None]
-        gamma = self.rand_fc2(z)[:, :, None, None]
-        # gamma, beta = torch.chunk(h, chunks=2, dim=1)
-        x = self.get_adain(x, (-1, -2), gamma, beta)
-        return x
-
-    def forward(self, x):
-        with torch.no_grad():
-            x = self.encoder(x)
-        if self.need_adain:
-            x = self.get_random(x)
-        x = self.decoder(x)
-        return x
-
-
-class Conv2dBlocks(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
-        super(Conv2dBlocks, self).__init__()
-
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, stride=stride if stride > 0 else 1, kernel_size=kernel_size,
-                      padding=padding, padding_mode='replicate'),
-            #nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
-        )
-        if stride < 0:
-            self.conv1.append(nn.Upsample(scale_factor=-stride, mode='nearest'))
-
-    def forward(self, x):
-        x = self.conv1(x)
-        return x
-
-
-class AmpEncoder3(nn.Module):
-    def __init__(self, in_channel=1, hidden_channel=1, kernel_size=3, in_size=(32, 32), eps=1e-5, zdim=8,
-                 need_adain=True):
-        super(AmpEncoder3, self).__init__()
-        self.eps = eps
-        padding = (kernel_size - 1) // 2
-        self.conv0 = Conv2dBlocks(8, 8, stride=1)
-        self.conv1 = Conv2dBlocks(8, 16, stride=2)
-        self.conv2 = Conv2dBlocks(16, 16, stride=1)
-        self.conv3 = Conv2dBlocks(16, 32, stride=2)
-
-        self.conv4 = Conv2dBlocks(32, 32, stride=1)
-
-        self.conv5 = Conv2dBlocks(32, 16, stride=-2)
-        self.conv6 = Conv2dBlocks(16, 16, stride= 1)
-        self.conv7 = Conv2dBlocks(16, 8, stride=-2)
-        self.conv8 = Conv2dBlocks(8, 8, stride=1)
-
-        self.zdim = zdim
-        self.need_adain = need_adain
-        if need_adain:
-            self.rand_fc1 = nn.Sequential(
-                nn.Linear(self.zdim, 8*2),
-                nn.ReLU()
-            )
-            self.rand_fc2 = nn.Sequential(
-                nn.Linear(self.zdim, 16 * 2),
-                nn.ReLU()
-            )
-            self.rand_fc3 = nn.Sequential(
-                nn.Linear(self.zdim, 32 * 2),
-                nn.ReLU()
-            )
-
-        self.dp = nn.Dropout(0.)
-        self.norm = nn.InstanceNorm2d(hidden_channel, affine=False)
-        self.alpha1 = nn.Parameter(torch.tensor(0.1), requires_grad=True)
-        self.alpha2 = nn.Parameter(torch.tensor(0.1), requires_grad=True)
-        self.alpha3 = nn.Parameter(torch.tensor(0.1), requires_grad=True)
-
-    def get_adains(self, x, fc, alpha):
-        # origin = x
-        x = self.dp(x)
-        z = torch.randn(len(x), self.zdim, device=x.device)
-        gamma, beta = torch.chunk(fc(z), 2, -1)
-        #mean_x = torch.mean(x, dim=(-2, -1), keepdim=True)
-        #std_x = torch.std(x, dim=(-2, -1), keepdim=True)
-        # std_x = torch.sqrt(var_x + self.eps)
-        #x = (x - mean_x)/(std_x + self.eps)
-        x = self.norm(x)
-        x = x * gamma[:, :, None, None] + beta[:, :, None, None]
-
-        return x
-
-    def forward(self, x):
-        x = self.conv0(x) #32=>32 4x4
-        x1 = self.conv1(x) #32=>16 4x8
-        x2 = self.conv2(x1) #16=>16 8x8
-        x3 = self.conv3(x2) #16=>8 8x16
-        x3 = self.get_adains(x3, self.rand_fc3, self.alpha3)
-        x4 = self.conv4(x3) #8=>8 16x16
-        x5 = self.get_adains(self.conv5(x4), self.rand_fc2, self.alpha2) #8=>16 16x8
-        x6 = self.conv6(x5) + x1   #16=>16 8x8
-        x7 = self.get_adains(self.conv7(x6), self.rand_fc1, self.alpha1) #16=>32 8x4
-        x = self.conv8(x7)  + x #32=>32 4x4
-        return x
-
-
 class AmpEncoder(nn.Module):
-    def __init__(self, in_channel=1, hidden_channel=1, kernel_size=3, eps=1e-5, zdim=8):
+    def __init__(self, in_channel=1, hidden_channel=1, kernel_size=3, eps=1e-9, zdim=8):
         super(AmpEncoder, self).__init__()
         self.eps = eps
-        padding = (kernel_size - 1)//2
+        padding = (kernel_size - 1) // 2
+        padding = 0
         self.conv1 = nn.Sequential(
+            #nn.Upsample(size=(40, 40), mode='bilinear'),
+            #nn.InstanceNorm2d(1, affine=False),
+            #nn.ReLU(),
             nn.Conv2d(in_channels=1, out_channels=8, kernel_size=kernel_size, padding=padding,
-                      stride=1, padding_mode='replicate'),
+                      stride=1, padding_mode='reflect'),
             nn.ReLU(),
             nn.Conv2d(in_channels=8, out_channels=8, kernel_size=kernel_size, padding=padding,
-                      stride=1, padding_mode='replicate'),
-            nn.MaxPool2d(2),
-            nn.ReLU(),)
-        self.conv2 = nn.Sequential(
+                      stride=1, padding_mode='reflect'),
+            nn.ReLU(),
             nn.Conv2d(in_channels=8, out_channels=16, kernel_size=kernel_size, padding=padding,
-                      stride=1, padding_mode='replicate'),
+                      stride=1, padding_mode='reflect'),
             nn.ReLU(),
-            #nn.Dropout(0.2),
-            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=kernel_size, padding=padding,
-                      stride=1, padding_mode='replicate'),
-            nn.ReLU(),
-            # nn.Hardswish(),
         )
+
         self.zdim = zdim
         self.rand_fc = nn.Sequential(
-            nn.Linear(self.zdim, 32),
-            )
-
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=kernel_size, padding=padding,
-                      padding_mode='replicate'),
-            #nn.BatchNorm2d(in_channel),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=16, out_channels=8, kernel_size=kernel_size, padding=padding,
-                      padding_mode='replicate'),
-            nn.ReLU(),)
-        self.conv4 = nn.Sequential(
-            # nn.BatchNorm2d(in_channel),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(in_channels=8, out_channels=8, kernel_size=kernel_size, padding=padding,
-                      padding_mode='replicate'),
-            # nn.BatchNorm2d(in_channel),
-            nn.ReLU(),
-            nn.Conv2d(8, 1, kernel_size, padding=padding, padding_mode='replicate'),
+            nn.Linear(self.zdim, 32, bias=True),
+            #nn.ReLU()
         )
-        self.dp = nn.Dropout(0.0)
-        self.norm = nn.InstanceNorm2d(1, affine=False)
-        self.alpha = nn.Parameter(torch.tensor(0.1), requires_grad=True)
 
-    def get_adain(self, x, dim=(-2, -1)):
-        z = torch.randn(len(x), self.zdim, device=x.device)
-        h = self.rand_fc(z)
-        gamma, beta = torch.chunk(h, chunks=2, dim=1)
-        mean_x = torch.mean(x, dim=dim, keepdim=True)
-        var_x = torch.var(x, dim=dim, keepdim=True)
+
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(in_channels=16, out_channels=8, kernel_size=kernel_size, padding=padding,
+                      stride=1, padding_mode='reflect'),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=8, out_channels=8, kernel_size=kernel_size, padding=padding,
+                      stride=1, padding_mode='reflect'),
+            nn.ReLU(),
+            nn.Conv2d(8, 1, kernel_size, padding=padding, padding_mode='reflect'),
+        )
+        self.dp = nn.Dropout(0.1)
+        self.alpha = nn.Parameter(torch.tensor(0.5), requires_grad=True)
+
+    def get_adain(self, x):
+        #x = self.intancenorm(x)
+        mean_x = torch.mean(x, dim=(-2, -1), keepdim=True)
+        var_x = torch.var(x, dim=(-2, -1), keepdim=True)
         x = (x - mean_x)/torch.sqrt(var_x + self.eps)
-
-        #alpha = F.sigmoid(self.alpha)#[:,None, None]
-        #std_hat = torch.sqrt((1 - alpha) * var_x + alpha * F.relu(gamma[:, :, None, None]) + self.eps)
-        #mean_hat = alpha * beta[:, :, None, None] + (1 - alpha) * mean_x
-        x = x * F.relu(gamma[:, :, None, None]) + beta[:, :, None, None]
-
+        z = torch.randn(len(x), self.zdim, device=x.device)
+        #z = z * 0.1 + 1
+        h = self.rand_fc(z)
+        #beta = self.rand_fc2(z)
+        gamma, beta = torch.chunk(h, chunks=2, dim=1)
+        #gamma = gamma + 1
+        #alpha = F.sigmoid(self.alpha)
+        #alpha = torch.randn(x.size(0), x.size(1), device=x.device)
+        #alpha = alpha * 0.1 + 0.7
+        #alpha = alpha[:, :, None, None, None]
+        #std_hat = torch.sqrt(F.relu(alpha * var_x + (1-alpha) * gamma[:, None, :, None, None]) + self.eps)
+        #mean_hat = alpha * mean_x + (1-alpha) * beta[:, None, :, None, None]
+        x = x * gamma[:, None, :, None, None] + beta[:, None, :, None, None]
         return x
 
+    def forward(self, x, batch_size=None, padding_len=None):
+        x0 = F.pad(x, pad=(6, 6, 6, 6), mode='reflect')
+        x1 = self.conv1(x0)
+        x1 = x1.view(batch_size, padding_len, -1, 38, 38)
+        x2 = self.get_adain(x1)
 
-    def forward(self, x):
-        # res = x
-        x1 = self.conv1(x)
-        x2 = self.conv2(x1)
-        x_rand = self.get_adain(x2)
-        #x = self.dp(x)
-        #alpha = F.sigmoid(self.alpha)
-        alpha = 0.6
-        x2 = alpha * x2  + (1 - alpha) * x_rand
-        x2 = self.conv3(x2)
-        x2 = self.conv4(x2)
-        mean_x = torch.mean(x, dim=(-2, -1), keepdim=True)
-        std_x = torch.std(x, dim=(-2, -1), keepdim=True)
-        x2 = self.norm(x2)
-        x2 = x2 * std_x + mean_x
+        #x2 = self.alpha[0] * x1 + self.alpha[1]* x2
+        x2 = self.alpha * x1 + (1 - self.alpha)* x2
 
-        #x_rand = self.conv2(x_rand)
-        return x2 #, x_rand
+        x2 = x2.view(batch_size * padding_len, -1, 38, 38)
+        #x1 = x1.view(batch_size * padding_len, -1, 36, 36)
 
+        #alpha = 0.7
+        #print(self.alpha)
+        x3 = self.conv2(x2)
+        #x4 = self.conv2(x1)
+        #x4 = self.conv2(x1)
+        #x4 = self.get_in(x4, x)
+        #x3 = self.get_in(x3, x)
+        return x3, None  # , x_rand
 
 
 class Generator(nn.Module):
-    def __init__(self, zdim=8):
+    def __init__(self, zdim=10):
         super(Generator, self).__init__()
         self.zdim = zdim
         self.amp_encoder1 = AmpEncoder(zdim=zdim, kernel_size=3)
@@ -297,19 +132,21 @@ class Generator(nn.Module):
         h = x.size(2)
         w = x.size(3)
         x = x.view(batch_size * padding_len, -1, h, w)
-        x1 = self.amp_encoder1(x)
+        x1, x_recon = self.amp_encoder1(x,batch_size, padding_len)
+        #x1 = ReverseLayerF.apply(x1, -1)
         x1 = x1.view(batch_size, padding_len, h, w)
+
         x1_rev = ReverseLayerF.apply(x1, alpha)
 
-        return x1, x1_rev
+        return x1, x1_rev, x_recon
 
 
-def get_norm(rai, data_len):
+def get_norm2(rai, data_len, eps=1e-9):
     rai_packed = rai[:data_len]
     # 计算每个维度的最大值、均值和标准差
-    rai_mean = torch.mean(rai_packed, dim=0)
-    rai_var = torch.var(rai_packed, dim=0)
-    rai = (rai - rai_mean) / torch.sqrt(rai_var + 1e-5)
+    rai_mean = torch.mean(rai_packed, dim=(0, 1, 2))
+    rai_var = torch.var(rai_packed, dim=(0, 1, 2))
+    rai = (rai - rai_mean) / torch.sqrt(rai_var + eps)
     return rai
 
 
@@ -331,10 +168,10 @@ class DANN(nn.Module):
             nn.Linear(192, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.BatchNorm1d(64),
+            nn.Linear(128, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Linear(64, 2)
+            nn.Linear(128, 2)
         )
 
     def forward(self, x, track, data_lens, alpha, need_domain=True):
