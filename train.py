@@ -1,5 +1,6 @@
 import seaborn as sns
 import matplotlib.pyplot as plt
+import torch
 import torch.optim as optim
 import visdom
 
@@ -8,21 +9,22 @@ from data.real_time_dataset import get_real_time_data
 from log_helper import LogHelper
 from torchmetrics.classification import MulticlassAUROC, MulticlassAveragePrecision
 from sklearn.metrics import confusion_matrix
-from model.compare_methods import DiGesture, RadarNet, Resnet50Classifier, MobilenetV350Classifier, RFDual
+from model.baseline import DiGesture, RadarNet, Resnet50Classifier, MobilenetV350Classifier, RFDual, MTNet
 from data.mcd_dataset import *
 from model.network import *
 from result_collector import cross_domain_results
 
 # 0:RANGE_ANGLE_IMAGE
-# 1:TIME_FREQUENCY_IMAGE
+# 1:TIME_RANGE_ANGLE_IMAGE
 # 2:COMPLEX_RANGE_DOPPLER
 # 3:SINGLE_RANGE_DOPPLER
 # 4:CROPPED_RANGE_DOPPLER_IMAGER
 RANGE_ANGLE_IMAGE = 'RANGE_ANGLE_IMAGE'
-TIME_FREQUENCY_IMAGE = 'TIME_FREQUENCY_IMAGE'
+TIME_RANGE_ANGLE_IMAGE = 'TIME_RANGE_ANGLE_IMAGE'
 COMPLEX_RANGE_DOPPLER = 'COMPLEX_RANGE_DOPPLER'
 SINGLE_RANGE_DOPPLER = 'SINGLE_RANGE_DOPPLER'
 CROPPED_RANGE_DOPPLER_IMAGER = 'CROPPED_RANGE_DOPPLER_IMAGER'
+TIME_RANGE_DOPPLER_IMAGE = 'TIME_RANGE_DOPPLER_IMAGE'
 
 
 def seed_worker(worker_id):
@@ -74,6 +76,16 @@ def dynamic_sequence_collate_fn(datas_and_labels):
     datas = pad_sequence(datas, batch_first=True, padding_value=0)
     return datas, torch.tensor(data_lengths), labels
 
+def mt_unify_sequence(x):
+    x = x.unsqueeze(0)
+    x = F.interpolate(x, size=(64, 64), mode='bilinear', align_corners=False)
+    return torch.squeeze(x)
+
+def mt_collate_fn(datas_and_labels):
+    datas = [mt_unify_sequence(item[0]) for item in datas_and_labels]
+    datas = torch.stack(datas)
+    labels = torch.stack([item[1] for item in datas_and_labels])
+    return datas, labels
 
 def radar_net_unify_sequence(x):
     x = x.unsqueeze(0)
@@ -124,8 +136,11 @@ def get_model(model_type=0, out_size=6, data_type=RANGE_ANGLE_IMAGE, multistream
         collect_fn = dynamic_sequence_collate_fn
     elif model_type == 5:
         model = Resnet50Classifier(out_size=out_size)
-    else:
+    elif model_type == 6:
         model = MobilenetV350Classifier(out_size=out_size)
+    else:
+        model = MTNet(out_size)
+        collect_fn = mt_collate_fn
 
     model_name = type(model).__name__
     if model_type == 1 or model_type == 0:
@@ -330,7 +345,7 @@ def k_fold(augmentation=True, epoch=200, start_epoch=0, domain=1, data_type=RANG
 def cross_domain(augmentation=True, epoch=200, start_epoch=0, domain=1, data_type=RANGE_ANGLE_IMAGE, model_type=0,
                  batch_size=128, train_index=None, test_index=None, need_test=False, val_time=5,
                  multistream=True, diff=True, attention=True, data_spliter=None, train_manager=None,
-                 need_save_result=True):
+                 need_save_result=True, val_aug=False):
     if train_manager is None:
         train_manager = ModelTrainingManager(class_num=data_spliter.get_class_num())
     set_random_seed()
@@ -339,7 +354,9 @@ def cross_domain(augmentation=True, epoch=200, start_epoch=0, domain=1, data_typ
         start = 1
     else:
         start = 0
-    acc_auc_ap = np.zeros((val_time, len(test_index) + start, 3))
+
+    num_domain = len(test_index) if test_index is not None else 0
+    acc_auc_ap = np.zeros((val_time, num_domain + start, 3))
     for v_i in range(val_time):
         # domain, train_index, val_index, test_index, need_val, need_test, need_augmentation, is_reduction
         train_set, test_set, val_set = data_spliter.split_data(domain, train_index, None, None, need_val=True,
@@ -348,6 +365,8 @@ def cross_domain(augmentation=True, epoch=200, start_epoch=0, domain=1, data_typ
                                                   diff, attention, aug=augmentation, dataset=type(data_spliter).__name__
                                                   , domain=domain)
         train_loader = get_dataloader(train_set, True, batch_size, collate_fn)
+        if val_aug:
+            val_set.transform = train_set.transform
         val_loader = get_dataloader(val_set, False, batch_size, collate_fn)
         print('model:{} domain:{} len:{}'.format(model_name, domain, train_set.len))
         train_manager.train_and_val(model, train_loader, val_loader, epoch, lr_list=[get_lr(epoch)],
@@ -355,13 +374,19 @@ def cross_domain(augmentation=True, epoch=200, start_epoch=0, domain=1, data_typ
         if need_test:
             test_loader = get_dataloader(test_set, False, batch_size, collate_fn)
             acc_auc_ap[v_i, 0, 0], _, acc_auc_ap[v_i, 0, 1], acc_auc_ap[
-                v_i, 0, 2], _, _ = train_manager.test_or_val(model, test_loader)
-        for i, t_i in enumerate(test_index, start=start):
-            test_set = data_spliter.get_dataset([t_i])
-            test_loader = get_dataloader(test_set, False, batch_size, collate_fn)
-            acc_auc_ap[v_i, i, 0], _, acc_auc_ap[v_i, i, 1], acc_auc_ap[
-                v_i, i, 2], _, _ = train_manager.test_or_val(model, test_loader)
+                v_i, 0, 2], pred_label, true_label = train_manager.test_or_val(model, test_loader)
+            class_acc = get_acc_per_class(pred_label, true_label)
+            for class_idx, class_acc in enumerate(class_acc):
+                print(f'Class {class_idx}: Accuracy {class_acc:.4f}')
 
+        if test_index is not None:
+            for i, t_i in enumerate(test_index, start=start):
+                test_set = data_spliter.get_dataset([t_i])
+                test_loader = get_dataloader(test_set, False, batch_size, collate_fn)
+                acc_auc_ap[v_i, i, 0], _, acc_auc_ap[v_i, i, 1], acc_auc_ap[
+                    v_i, i, 2], _, _ = train_manager.test_or_val(model, test_loader)
+
+    test_index = [] if test_index is None else test_index
     test_index = [-1] + test_index if need_test else test_index
     if need_save_result:
         cross_domain_results(model_name=model_name,
@@ -404,6 +429,11 @@ def unpack_run_model(model, pack, device):
 def get_correct_num(outputs, labels):
     prediction = torch.argmax(outputs, 1)
     return (prediction == labels).sum().float().item()
+
+def get_acc_per_class(pred_label, ture_label):
+    conf_matrix = confusion_matrix(ture_label, pred_label)
+    class_accuracy = conf_matrix.diagonal() / conf_matrix.sum(axis=1)
+    return class_accuracy
 
 class ModelTrainingManager:
     def __init__(self, device=None, criterion=None, optimizer=None, class_num=6, auc_compute=None,
@@ -586,5 +616,6 @@ class ModelTrainingManager:
             acc=best_acc))
         if self.need_confusion_matrix:
             plot_confusion_matrix(best_ture_label, best_predict_label, cm_title)
+            print
 
         return best_acc, best_auc, best_ap

@@ -584,3 +584,97 @@ class CNN2DClassifier(nn.Module):
         x = F.relu(x)
         x = self.fc_3(x)
         return x
+
+
+
+
+class MTConv(nn.Module):
+    def __init__(self, in_channel, out_channel, padding=1):
+        super(MTConv, self).__init__()
+        self.ds_conv = nn.Sequential(
+            nn.Conv2d(in_channels=in_channel, out_channels=in_channel, groups=in_channel, kernel_size=3, padding=1, stride=1),
+            nn.BatchNorm2d(in_channel),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=in_channel, out_channels=out_channel, kernel_size=1, padding=0, stride=1),
+            nn.BatchNorm2d(out_channel),
+            nn.ReLU(),
+            nn.MaxPool2d(2, padding=1)
+        )
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels=in_channel, out_channels=out_channel, kernel_size=1, padding=padding, stride=2),
+            nn.BatchNorm2d(out_channel),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        x1 = self.ds_conv(x)
+        x2 = self.conv(x)
+        x = x1 + x2
+        x = x.view(x.size(0), x.size(1), -1)
+        return x2, x
+
+class LearnablePositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=256):
+        super(LearnablePositionalEncoding, self).__init__()
+        self.positional_encoding = nn.Embedding(max_len, d_model)
+        self.max_len = max_len
+
+    def forward(self, x):
+        # x shape: (batch_size, seq_len, d_model)
+        batch_size, seq_len, d_model = x.size()
+        positions = torch.arange(0, seq_len, device=x.device).unsqueeze(0).expand(batch_size, seq_len)
+        return x + self.positional_encoding(positions)
+
+class MLFF(nn.Module):
+    def __init__(self):
+        super(MLFF, self).__init__()
+        self.conv_input = nn.Sequential(
+            nn.Conv2d(in_channels=1, out_channels=64, kernel_size=3, padding=0, stride=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+        )
+        self.conv_layer1 = MTConv(64, 64)
+        self.conv_layer2 = MTConv(64, 128)
+        self.conv_layer3 = MTConv(128, 256, padding=0)
+        self.down_sample1 = nn.Linear(1024, 81)
+        self.down_sample2 = nn.Linear(289, 81)
+
+    def forward(self, x):
+        x_c = self.conv_input(x)
+        x_c, x_d1 = self.conv_layer1(x_c)
+        x_c, x_d2 = self.conv_layer2(x_c)
+        _, x_d3 = self.conv_layer3(x_c)
+        x_d1 = self.down_sample1(x_d1)
+        x_d2 = self.down_sample2(x_d2)
+        x = torch.cat((x_d1, x_d2, x_d3), dim=1)
+        return x
+
+# MLFF + Transformer
+class MTNet(nn.Module):
+    def __init__(self, out_size=6):
+        super(MTNet, self).__init__()
+        self.range_conv = MLFF()
+        self.angle_conv = MLFF()
+        self.learnable_pos = LearnablePositionalEncoding(81)
+
+        # 定义一个 Transformer 编码器层
+        encoder_layer = nn.TransformerEncoderLayer(d_model=448, nhead=9, dropout=0.2, batch_first=True)
+        # 定义一个 Transformer 编码器
+        self.transformer_encoder  = nn.TransformerEncoder(encoder_layer, num_layers=4)
+        self.adaptive_avg_pooling = nn.AdaptiveAvgPool1d(1)
+        self.classifier = nn.Sequential(
+            nn.Linear(448, 128),
+            nn.Linear(128, out_size)
+        )
+
+
+    def forward(self, x):
+        f_range = self.range_conv(x[:, 0] [:, None, :])
+        f_angle = self.angle_conv(x[:, 1] [:, None, :])
+        x = f_angle + f_range
+        x = self.learnable_pos(x)
+        x = self.transformer_encoder(x)
+        x = self.adaptive_avg_pooling(x)
+        x = torch.squeeze(x)
+        x = self.classifier(x)
+        return x

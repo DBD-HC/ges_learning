@@ -177,9 +177,9 @@ class DifferentialNetwork(nn.Module):
         return x, before_diff
 
 
-def lstm_func(lstm_block, data, data_lens):
+def lstm_func(lstm_block, data, data_lens, enforce_sorted=True):
     if data_lens is not None:
-        x = pack_padded_sequence(data, data_lens.cpu(), batch_first=True)
+        x = pack_padded_sequence(data, data_lens.cpu(), batch_first=True, enforce_sorted=enforce_sorted)
         output, (h_n, _) = lstm_block(x)
         output, out_len = pad_packed_sequence(output, batch_first=True)
     else:
@@ -188,7 +188,7 @@ def lstm_func(lstm_block, data, data_lens):
 
 
 class TemporalModel(nn.Module):
-    def __init__(self, feat_size1=32, feat_size2=32, attention=True, diff=True, multistream=False, heads=2):
+    def __init__(self, feat_size1=32, feat_size2=32, attention=True, diff=True, multistream=False, heads=2, enforce_sorted=True):
         super(TemporalModel, self).__init__()
         if not multistream:
             self.lstm_1 = nn.LSTM(input_size=feat_size1, hidden_size=feat_size1, num_layers=1, batch_first=True)
@@ -208,16 +208,17 @@ class TemporalModel(nn.Module):
 
         self.bn_1 = nn.BatchNorm1d(hidden_size)
         self.need_diff = diff
+        self.enforce_sorted = enforce_sorted
 
     def forward(self, x1=None, x2=None, x3=None, data_lens=None):
         if self.need_diff and data_lens is not None:
             data_lens = data_lens - 1
 
         if x1 is not None:
-            output, final_state = lstm_func(self.lstm_1, x1, data_lens)
+            output, final_state = lstm_func(self.lstm_1, x1, data_lens, enforce_sorted=self.enforce_sorted)
         else:
-            output_2, final_state_2 = lstm_func(self.lstm_2, x2, data_lens)
-            output_3, final_state_3 = lstm_func(self.lstm_3, x3, data_lens)
+            output_2, final_state_2 = lstm_func(self.lstm_2, x2, data_lens, enforce_sorted=self.enforce_sorted)
+            output_3, final_state_3 = lstm_func(self.lstm_3, x3, data_lens, enforce_sorted=self.enforce_sorted)
             output = torch.cat((output_2, output_3), dim=-1)
             final_state = torch.cat((final_state_2, final_state_3), dim=-1)
             # final_state = self.funsion_fc(final_state)
@@ -258,8 +259,8 @@ class TrackConv(nn.Module):
 
 class RAIRadarGestureClassifier(nn.Module):
     def __init__(self, multistream=True, diff=True, attention=True, heads=4, in_size=(32, 32, 32),
-                 in_channel=1, conv2d_feat_size=64, out_size=7, track_channels=(4, 8, 16),
-                 ra_feat_size=32, track_out_size=64, spatial_channels=(8, 16, 32), conv1d_channels=(8, 16, 32)):
+                 in_channel=1, conv2d_feat_size=64, out_size=7, track_channels=(4, 8, 16), frame_level_norm = False,
+                 ra_feat_size=32, track_out_size=64, spatial_channels=(8, 16, 32), conv1d_channels=(8, 16, 32), enforce_sorted=True):
         super(RAIRadarGestureClassifier, self).__init__()
 
         self.multistream = multistream
@@ -270,7 +271,7 @@ class RAIRadarGestureClassifier(nn.Module):
                                       in_channels=in_channel)
         fc_feat_size = 0
         self.temporal_model = TemporalModel(feat_size1=conv2d_feat_size, attention=attention, multistream=multistream,
-                                            heads=heads, diff=diff, feat_size2=ra_feat_size)
+                                            heads=heads, diff=diff, feat_size2=ra_feat_size, enforce_sorted=enforce_sorted)
         if multistream:
             self.tn = TrackConv(in_channels=in_channel, num_channels=track_channels, in_size=in_size,
                                 out_size=track_out_size)
@@ -280,8 +281,14 @@ class RAIRadarGestureClassifier(nn.Module):
             fc_feat_size = fc_feat_size + conv2d_feat_size
 
         self.classifier = nn.Linear(fc_feat_size, out_size)
+        self.fln = frame_level_norm
+        if frame_level_norm:
+            self.ln = nn.LayerNorm([32, 32])
+
 
     def forward(self, rai, data_length, track):
+        if self.fln:
+            rai = self.ln(rai)
         bach_size = rai.size(0)
         padded_lens = rai.size(1)
         h = rai.size(-2)

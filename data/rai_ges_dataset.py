@@ -3,7 +3,7 @@ from data.data_splitter import DataSpliter, data_type_map, data_normalization
 from utils import *
 
 rai_root = '/root/autodl-tmp/dataset/rai_ges/rai_data'
-time_frequency_root = '/root/autodl-tmp/dataset/rai_ges/tf_data'
+time_range_angle_root = '/root/autodl-tmp/dataset/rai_ges/tf_data'
 
 static_angle_range = np.arange(-20, 21)
 static_distance_range = np.arange(-6, 7)
@@ -36,9 +36,10 @@ class RAIGesDataSplitter(DataSpliter):
         self.locations = ['0', '1', '2', '3', '4']
 
         super(RAIGesDataSplitter, self).__init__(data_path=data_path, domain_num=(
-        3, len(self.envs), len(self.locations), len(self.participants)))
+        3, len(self.envs), len(self.locations), len(self.participants), 0))
         self.file_format = 'rai_{ges}_{user}_{position}_{env}_s{sample}.npy'
         self.pre_domain = -1
+        self.od_for_train = [[0], [1] , [0, 6, 7]]
 
     def get_domain_num(self, domain):
         return self.domain_num[domain]
@@ -96,7 +97,7 @@ class RAIGesDataSplitter(DataSpliter):
                                         self.train_data_filenames[j].extend(temp_data[i:i + size])
                                         self.train_label_list[j].extend(temp_label[i:i + size])
                                     j += 1
-            else:
+            elif domain == 1 or domain == 2 or domain == 3:
                 for g_i, g in enumerate(self.gestures):
                     for e_i, e in enumerate(self.envs):
                         domain_index[1] = e_i
@@ -111,6 +112,24 @@ class RAIGesDataSplitter(DataSpliter):
                                     self.train_label_list[domain_index[domain]].append(g_i)
                                     index += 1
                                     filename = self.file_format.format(ges=g, user=u, position=p, env=e, sample=index)
+            else:
+                # 'rai_{ges}_{user}_{position}_{env}_s{sample}.npy'
+                for filename in self.filenames_set:
+                    if not filename.endswith('.npy'):
+                        continue
+                    values = filename.split('_')
+                    act = int(values[1])
+                    cur_user_idx = int(values[2])
+                    cur_env_idx = int(values[4])
+                    cur_loc_idx = int(values[3])
+                    if cur_env_idx in self.od_for_train[0] \
+                        and cur_loc_idx in self.od_for_train[1] \
+                        and cur_user_idx in self.od_for_train[-1]:
+                        self.train_data_filenames.append(filename)
+                        self.train_label_list.append(act)
+                    else:
+                        self.test_data_filenames.append(filename)
+                        self.test_label_list.append(act)
 
         datas = super().combine(train_index, val_index, test_index, is_reduction, need_val, need_test)
         return RAIGes(datas[0], datas[1], data_augmentation if need_augmentation else data_normalization, data_type=self.data_type), \
@@ -131,7 +150,7 @@ class RAIGes(Dataset):
         elif data_type == 0:
             self.data_root = rai_root
         else:
-            self.data_root = time_frequency_root
+            self.data_root = time_range_angle_root
 
         self.transform = transform
 
