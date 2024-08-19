@@ -4,8 +4,8 @@ The paper is currently under review.
 
 # Dataset
 
-![push](https://github.com/DBD-HC/ges_learning/blob/master/figs/f_push.png =600×)
-![slide](https://github.com/DBD-HC/ges_learning/blob/master/figs/f_slide.png =600×)
+![push](https://github.com/DBD-HC/ges_learning/blob/master/figs/f_push.png =600x)
+![slide](https://github.com/DBD-HC/ges_learning/blob/master/figs/f_slide.png =600x)
 
 You can access dataset at https://1drv.ms/u/c/0d23bed944a5417d/EYvSJPRnWu9GnTFbgLgjsNsBzdOcX5ZHGsd1lyDcsmnboA?e=IXaTPB
 
