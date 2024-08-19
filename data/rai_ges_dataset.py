@@ -21,10 +21,16 @@ def data_augmentation(d, data_type):
         d = random_translation(d)
         d = random_geometric_features(d)
         d = random_data_len_adjust_2(d)
-    elif data_type == data_type_map['CROPPED_RANGE_DOPPLER_IMAGER']:
-        d = crop_rdi(d)
+    elif data_type == data_type_map['CROPPED_RANGE_DOPPLER_IMAGER'] or data_type == data_type_map['CROPPED_RANGE_ANGLE_IMAGER']:
+        #d = crop_rai(d)    
+        d = random_rdi_speed(d)
 
     d = data_normalization(d, data_type)
+    return d
+
+def pre_processing(d, data_type):
+    if data_type == data_type_map['CROPPED_RANGE_DOPPLER_IMAGER'] or data_type == data_type_map['CROPPED_RANGE_ANGLE_IMAGER']:
+        d = crop_rai(d)  
     return d
 
 
@@ -40,6 +46,7 @@ class RAIGesDataSplitter(DataSpliter):
         self.file_format = 'rai_{ges}_{user}_{position}_{env}_s{sample}.npy'
         self.pre_domain = -1
         self.od_for_train = [[0], [1] , [0, 6, 7]]
+        self.pre_processing = pre_processing
 
     def get_domain_num(self, domain):
         return self.domain_num[domain]
@@ -147,17 +154,19 @@ class RAIGes(Dataset):
         self.data_type = data_type
         if data_root is not None:
             self.data_root = data_root
-        elif data_type == 0:
+        elif data_type == data_type_map['RANGE_ANGLE_IMAGE'] or data_type == data_type_map['CROPPED_RANGE_ANGLE_IMAGER']:
             self.data_root = rai_root
         else:
             self.data_root = time_range_angle_root
 
         self.transform = transform
+        self.pre_processing = pre_processing
 
 
     def __getitem__(self, index):
         d = np.load(os.path.join(self.data_root, self.file_names[index]))
         label = self.labels[index]
+        d = self.pre_processing(d, self.data_type)
         d = self.transform(d, self.data_type)
 
         label = torch.tensor(label)

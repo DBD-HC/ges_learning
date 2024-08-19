@@ -71,7 +71,6 @@ class DANDataset(Dataset):
     def get_data(self, index):
         d1 = np.load(os.path.join(self.data_root, self.file_names[index]))
         label1 = self.labels[index]
-
         d1_aug = np.zeros_like(d1)
         d1_aug[:] = d1[:]
         d1 = self.transform(d1, 0)
@@ -81,10 +80,12 @@ class DANDataset(Dataset):
 
         track1 = get_track(d1)
         track1 =torch.from_numpy(track1).type(torch.float32)
+        track2 = get_track(d1_aug)
+        track2 =torch.from_numpy(track2).type(torch.float32)
         d1 = torch.from_numpy(d1).type(torch.float32)
         label1 = torch.tensor(label1)
         d1_aug = torch.from_numpy(d1_aug).type(torch.float32)
-        return d1, track1, d1_aug, label1
+        return d1, track1, d1_aug, track2, label1
 
     def __getitem__(self, index):
         # label = torch.tensor([int(label1 == label2)], dtype=torch.float32)

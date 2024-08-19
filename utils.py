@@ -157,7 +157,7 @@ def crop(rais):
     rais = simple_shift(rais, rais.shape[-2]//2 - max_index, 0)
     return rais
 
-def crop_rdi(d):
+def crop_complex_rdi(d):
     d = np.sqrt(d[:, 0::2] ** 2 + d[:, 1::2] ** 2)
     d = np.mean(d, axis=1)
     d = crop(d)
@@ -166,6 +166,19 @@ def crop_rdi(d):
     # static removal
     d[:, :, 15:18] = 0
     return d
+
+def crop_rai(rais):
+    mean_rai = np.mean(rais, axis=0)
+    max_coords = np.unravel_index(mean_rai.argmax(), mean_rai.shape)
+    rais = simple_shift(rais, rais.shape[1]//2 - max_coords[0], rais.shape[2]//2 - max_coords[1],)
+    return rais
+
+ratio_list = np.array([7/5, 6/5, 5/6, 5/7])
+
+def random_rdi_speed(rdis):
+    ratio = random.choice(ratio_list)
+    new_rdis = resample(rdis, ratio)
+    return new_rdis
 
 def resample_time(rdis, ratio):
     rdis =  np.transpose(rdis, (2, 1, 0))

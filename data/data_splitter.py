@@ -9,7 +9,8 @@ data_type_map = {
     'COMPLEX_RANGE_DOPPLER':2,
     'SINGLE_RANGE_DOPPLER':3,
     'CROPPED_RANGE_DOPPLER_IMAGER':4,
-    'TIME_RANGE_DOPPLER_IMAGE':5
+    'TIME_RANGE_DOPPLER_IMAGE':5,
+    'CROPPED_RANGE_ANGLE_IMAGER':6
 }
 
 def data_normalization(d, data_type):

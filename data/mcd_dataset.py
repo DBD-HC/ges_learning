@@ -31,7 +31,7 @@ def generate_time_range_doppler():
 
 static_angle_range = np.arange(-20, 21)
 static_distance_range = np.arange(-6, 7)
-ratio_list = np.array([7/5, 6/5, 5/6, 5/7])
+
 
 def random_translation(datas):
     d_distance = random.choice(static_distance_range)
@@ -41,10 +41,6 @@ def random_translation(datas):
 
 # def cropped_rdi_augmentation(d):
 
-def random_rdi_speed(rdis):
-    ratio = random.choice(ratio_list)
-    new_rdis = resample(rdis, ratio)
-    return new_rdis
 
 def data_augmentation(d, data_type):
     # rai
@@ -53,6 +49,7 @@ def data_augmentation(d, data_type):
         d = random_geometric_features(d)
         d = random_data_len_adjust_2(d)
     elif data_type == data_type_map['CROPPED_RANGE_DOPPLER_IMAGER']:
+        #d = crop_complex_rdi(d)
         d = random_rdi_speed(d)
     d = data_normalization(d, data_type)
     return d

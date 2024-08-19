@@ -1,5 +1,5 @@
 from data.rai_ges_dataset import RAIGesDataSplitter
-from train import TIME_RANGE_ANGLE_IMAGE, RANGE_ANGLE_IMAGE, cross_domain, train_transferring, k_fold, \
+from train import TIME_RANGE_ANGLE_IMAGE, RANGE_ANGLE_IMAGE, CROPPED_RANGE_ANGLE_IMAGER, cross_domain, train_transferring, k_fold, \
     train_for_real_time
 
 if __name__ == '__main__':
@@ -19,16 +19,42 @@ if __name__ == '__main__':
     # 2:location
     # 3:user
 
-    # in domain
-    # k_fold(augmentation=True, epoch=200, start_epoch=0, domain=0, data_type=RANGE_ANGLE_IMAGE, batch_size=128,
-    #        model_type=0, train_manager=None, data_spliter=complex_DataSplitter)
+
     # cross user
+    cross_domain(augmentation=True, model_type=4, data_type=CROPPED_RANGE_ANGLE_IMAGER, domain=3,
+                 train_index=[0, 6, 7],
+                 test_index=[1, 2, 3, 4, 5, 8, 9],
+                 val_time=5,
+                 epoch=200, data_spliter=complex_DataSplitter)
+    
+    # cross environment
+    cross_domain(augmentation=True, model_type=4, data_type=CROPPED_RANGE_ANGLE_IMAGER, domain=1,
+                 train_index=[0],
+                 test_index=[1, 2, 3],
+                 val_time=5,
+                 need_test=True,
+                 epoch=200, data_spliter=complex_DataSplitter)
+    # cross location
+    cross_domain(augmentation=True, model_type=4, data_type=CROPPED_RANGE_ANGLE_IMAGER, domain=2,
+                 train_index=[1],
+                 test_index=[0, 2, 3, 4],
+                 val_time=5,
+                 need_test=True,
+                 epoch=200, data_spliter=complex_DataSplitter)
+
+    # in domain
+    k_fold(augmentation=True, epoch=200, start_epoch=0, domain=0, data_type=CROPPED_RANGE_ANGLE_IMAGER, batch_size=128,
+           model_type=4, train_manager=None, data_spliter=complex_DataSplitter)
+    
+    '''
+    
+    # one domain
     cross_domain(augmentation=True, model_type=0, data_type=RANGE_ANGLE_IMAGE, domain=4,
                  train_index=None,
                  test_index=None,
                  val_time=5, need_test=True,
                  epoch=200, data_spliter=complex_DataSplitter)
-
+    # cross user
     cross_domain(augmentation=True, model_type=2, data_type=RANGE_ANGLE_IMAGE, domain=3,
                  train_index=[0, 6, 7],
                  test_index=[1, 2, 3, 4, 5, 8, 9],
@@ -69,3 +95,5 @@ if __name__ == '__main__':
     train_for_real_time(model_type=0)
     train_for_real_time(model_type=1)
     train_for_real_time(model_type=2)
+
+    '''

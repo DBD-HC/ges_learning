@@ -283,7 +283,7 @@ class RAIRadarGestureClassifier(nn.Module):
         self.classifier = nn.Linear(fc_feat_size, out_size)
         self.fln = frame_level_norm
         if frame_level_norm:
-            self.ln = nn.LayerNorm([32, 32], elementwise_affine=False)
+            self.ln = nn.LayerNorm([32, 32], elementwise_affine=True)
 
 
     def forward(self, rai, data_length, track):
