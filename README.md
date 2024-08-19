@@ -6,6 +6,7 @@ The paper is currently under review.
 
 ![push](https://github.com/DBD-HC/ges_learning/blob/master/figs/f_push.png =600x600)
 ![slide](https://github.com/DBD-HC/ges_learning/blob/master/figs/f_slide.png =600x600)
+![Alt](https://i-blog.csdnimg.cn/blog_migrate/348f8ce8a69c97427cf55dde66f1b4c7.png =600x600)
 
 You can access dataset at https://1drv.ms/u/c/0d23bed944a5417d/EYvSJPRnWu9GnTFbgLgjsNsBzdOcX5ZHGsd1lyDcsmnboA?e=IXaTPB
 
