@@ -4,7 +4,8 @@ The paper is currently under review.
 
 # Dataset
 
-![Architecture](https://dubbo.apache.org/imgs/architecture.png)
+![push](https://github.com/DBD-HC/ges_learning/blob/master/figs/f_push.png)
+![slide](https://github.com/DBD-HC/ges_learning/blob/master/figs/f_slide.png)
 
 You can access dataset at https://1drv.ms/u/c/0d23bed944a5417d/EYvSJPRnWu9GnTFbgLgjsNsBzdOcX5ZHGsd1lyDcsmnboA?e=IXaTPB
 
