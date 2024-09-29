@@ -8,5 +8,5 @@ The paper is currently under review.
 <img src="https://github.com/DBD-HC/ges_learning/blob/master/figs/f_slide.png"  width="600" />
 
 
-You can access dataset at https://1drv.ms/u/c/0d23bed944a5417d/EYvSJPRnWu9GnTFbgLgjsNsBzdOcX5ZHGsd1lyDcsmnboA?e=IXaTPB
 
+The dataset and code will be fully released upon the acceptance of the paper. If there is any delay in the release, please contact hechu007@csu.edu.cn.
