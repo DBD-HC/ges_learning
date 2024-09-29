@@ -177,7 +177,7 @@ def soft_ce(outputs, smooth_labels):
 
 # 训练模型
 def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=True, num_epochs=200, batch_size=128,
-             phi=0.7, beta=0.1, val_aug=False, rec_factor_decay=True):
+             phi=0.7, beta=0.1, val_aug=False, rec_factor_decay=True, training_times=5):
     set_random_seed()
     if dataset_splitter == None:
         # dataset_splitter = MCDDataSplitter()
@@ -197,7 +197,8 @@ def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=T
     acc_auc_ap = np.zeros((5, domain_num, 3))
     train_manager = ModelTrainingManager(class_num=dataset_splitter.get_class_num())
 
-    for v_i in range(5):
+
+    for v_i in range(training_times):
         best_loss = 1e9
         model = DANN(out_size=dataset_splitter.get_class_num())
         g_model = Generator()
@@ -350,7 +351,7 @@ def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=T
                 loss = criterion(z1, l1) #+ criterion(z2, l1)
                 running_loss += loss.item()
 
-            if epoch % 5 == 0:
+            if epoch % 20 == 0:
                 val_model = model.predication
                 val_model.classifier.need_hidden = False
 
@@ -377,15 +378,15 @@ def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=T
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': running_loss
-                }, os.path.join('checkpoint', 'test_dk.pth'))
+                }, os.path.join('checkpoint', f'test_dk_{type(dataset_splitter).__name__}.pth'))
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': g_model.state_dict(),
                     'optimizer_state_dict': g_optimizer.state_dict(),
                     'loss': running_loss
-                }, os.path.join('checkpoint', 'test_generator.pth'))
+                }, os.path.join('checkpoint', f'test_generator_{type(dataset_splitter).__name__}.pth'))
                 print('==saved==')
-        params = torch.load(os.path.join('checkpoint', 'test_dk.pth'))['model_state_dict']
+        params = torch.load(os.path.join('checkpoint', f'test_dk_{type(dataset_splitter).__name__}.pth'))['model_state_dict']
         model.load_state_dict(params)
 
         val_model = model.predication
@@ -419,10 +420,21 @@ def train_dg(train_index, test_index, domain, dataset_splitter=None, need_test=T
                          res=acc_auc_ap,
                          file_name='dan_result.xlsx')
 
+def train_dg_split(dataset_splite=None, train_index=[0, 1, 2, 3, 4], test_index=[5, 6, 7], domain=1, need_test=False, phi=0.7, rec_factor_decay=False):
+    for i,v in enumerate(train_index):
+        temp_train = [v]
+        temp_test = test_index + [t_v for t_i, t_v in enumerate(train_index) if t_v not in temp_train]
+        train_dg(dataset_splitter=dataset_splite, domain=domain, need_test=need_test, train_index=temp_train,
+                 test_index=temp_test,
+                 phi=phi, val_aug=False, rec_factor_decay=rec_factor_decay, training_times=1)
+
 
 if __name__ == '__main__':
-
+    '''
     dataset_spliter = MCDDataSplitter()
+    train_dg(dataset_splitter=dataset_spliter, domain=4, need_test=False, train_index=None, test_index=None,
+             phi=0.8, val_aug=False, rec_factor_decay=False, training_times=1)
+
     train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=False, train_index=[5], test_index=[0, 1, 2, 3, 4],
             phi=0.8, val_aug=False, rec_factor_decay=False)
     train_dg(dataset_splitter=dataset_spliter, domain=1, need_test=False, train_index=[0, 1, 2, 3, 4],
@@ -430,10 +442,17 @@ if __name__ == '__main__':
             phi=0.7, val_aug=False, rec_factor_decay=False)
     train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=False, train_index=[0], test_index=[1, 2, 3, 4, 5],
             phi=0.8, val_aug=False)
-    train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=False, train_index=[5], test_index=[0, 1, 2, 3, 4],
+    train_dg(dataset_splitter=dataset_spliter, domain=3, need_test=False, train_index=[1], test_index=[0, 2, 3, 4],
             phi=0.8, val_aug=False)
-    
+    '''
+    #dataset_spliter = MCDDataSplitter()
+    #train_dg_split(dataset_splite=dataset_spliter, train_index=[0, 1, 2, 3, 4], test_index=[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+    #               domain=1, need_test=False, phi=0.7, rec_factor_decay=False)
     dataset_spliter = RAIGesDataSplitter()
+    train_dg_split(dataset_splite=dataset_spliter, train_index=[0, 1, 2],
+                   test_index=[4, 5, 6, 7, 8, 9],
+                   domain=3, need_test=False, phi=0.9, rec_factor_decay=True)
+    '''
     train_dg(dataset_splitter=dataset_spliter, domain=3, need_test=False, train_index=[0, 6, 7],
              test_index=[1, 2, 3, 4, 5, 8, 9],
              phi=0.9)
@@ -441,4 +460,5 @@ if __name__ == '__main__':
              phi=0.8)
     train_dg(dataset_splitter=dataset_spliter, domain=2, need_test=True, train_index=[1], test_index=[0, 2, 3, 4],
              phi=0.9)
+    '''
      

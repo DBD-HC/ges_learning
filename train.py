@@ -372,6 +372,7 @@ def cross_domain(augmentation=True, epoch=200, start_epoch=0, domain=1, data_typ
         print('model:{} domain:{} len:{}'.format(model_name, domain, train_set.len))
         train_manager.train_and_val(model, train_loader, val_loader, epoch, lr_list=[get_lr(epoch)],
                                     model_name=model_name)
+        model = train_manager.load_model(model, model_name)
         if need_test:
             test_loader = get_dataloader(test_set, False, batch_size, collate_fn)
             acc_auc_ap[v_i, 0, 0], _, acc_auc_ap[v_i, 0, 1], acc_auc_ap[
@@ -379,13 +380,19 @@ def cross_domain(augmentation=True, epoch=200, start_epoch=0, domain=1, data_typ
             class_acc = get_acc_per_class(pred_label, true_label)
             for class_idx, class_acc in enumerate(class_acc):
                 print(f'Class {class_idx}: Accuracy {class_acc:.4f}')
+        total_test_sample = 0
+        correct_test_sample = 0
 
         if test_index is not None:
             for i, t_i in enumerate(test_index, start=start):
                 test_set = data_spliter.get_dataset([t_i])
                 test_loader = get_dataloader(test_set, False, batch_size, collate_fn)
                 acc_auc_ap[v_i, i, 0], _, acc_auc_ap[v_i, i, 1], acc_auc_ap[
-                    v_i, i, 2], _, _ = train_manager.test_or_val(model, test_loader)
+                    v_i, i, 2], pred_label, true_label = train_manager.test_or_val(model, test_loader)
+                total_test_sample += len(pred_label)
+                correct_test_sample += sum(1 for a, b in zip(pred_label, true_label) if a == b)
+
+        print(f"===============total acc {correct_test_sample / total_test_sample}")
 
     test_index = [] if test_index is None else test_index
     test_index = [-1] + test_index if need_test else test_index
@@ -396,7 +403,7 @@ def cross_domain(augmentation=True, epoch=200, start_epoch=0, domain=1, data_typ
                              val_indexes=None,
                              test_indexes=test_index,
                              res=acc_auc_ap,
-                             file_name='cross_domain_result_{dataset}.xlsx'.format(dataset=type(data_spliter).__name__))
+                             file_name='a_cross_domain_result_{dataset}.xlsx'.format(dataset=type(data_spliter).__name__))
 
     acc_auc_ap = np.mean(acc_auc_ap, axis=0)
     for i, t_i in enumerate(test_index):
@@ -526,7 +533,10 @@ class ModelTrainingManager:
             '[Saved] model:{model_name} saved to fold:{path}'.format(model_name=model_name, path=self.checkpoint_path))
 
     def load_model(self, model, model_name):
+        if not model_name.endswith('.pth'):
+            model_name += '.pth'
         model.load_state_dict(torch.load(os.path.join(self.checkpoint_path, model_name))['model_state_dict'])
+        return model
 
     def run_one_epoch(self, model, dataloader, epoch):
         running_loss = 0.0
