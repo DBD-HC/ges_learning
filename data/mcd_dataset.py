@@ -238,7 +238,7 @@ def compress_rdi(d):
 
 def pre_processing(d, data_type):
     if data_type == data_type_map['CROPPED_RANGE_DOPPLER_IMAGER']:
-        d = crop_rdi(d)
+        d = crop_complex_rdi(d)
     return d
 
 class MCDDataset(Dataset):
